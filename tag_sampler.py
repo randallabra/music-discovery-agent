@@ -19,7 +19,7 @@ Usage
   python3 tag_sampler.py \\
       --csv   /path/to/history.csv \\
       --source lastfm              \\   # or: spotify
-      --api-key 1f6ee17cXXXXXXXX  \\
+      --api-key YOUR_LASTFM_API_KEY  \\
       --sample 500
 
 The script is read-only — it never modifies any agent file.
