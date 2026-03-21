@@ -55,7 +55,8 @@ def _init():
         "state_obj":        None,      # ProjectState (loaded from disk)
         "params": {
             "max_artist_plays":  200,
-            "max_unique_tracks": 10,
+            "max_unique_tracks": 20,
+            "min_unique_albums": 3,
             "min_track_plays":   8,
             "batch_size":        20,
             "anchor_pool_size":  50,
@@ -582,20 +583,35 @@ def step_parameters():
 
     left, right = st.columns(2, gap="large")
 
+    is_lastfm = (st.session_state.get("source") == "lastfm")
+
     with left:
         st.markdown("**Artist purge thresholds**")
+        st.caption(
+            "An artist is purged as **saturated** only when they clear **all** active thresholds simultaneously. "
+            "Meeting just one condition is not enough."
+        )
         max_plays = st.number_input(
             "Plays per artist before purging as 'saturated'",
             min_value=10, max_value=10000, step=10,
             value=p["max_artist_plays"],
-            help="Artists at or above this total are purged as 'saturated.' At 200, an artist you've played 200+ times is considered fully known, and the agent will not recommend new songs by them.",
+            help="Artists at or above this play count are candidates for saturation purge — but must also clear the other thresholds.",
         )
         max_tracks = st.number_input(
             "Unique tracks per artist before purging",
             min_value=1, max_value=200, step=1,
             value=p["max_unique_tracks"],
-            help="If you've heard this many distinct tracks by an artist, they're purged regardless of total play count — breadth of familiarity is itself a signal of saturation.",
+            help="Hearing 20+ distinct tracks by an artist signals broad familiarity. Combined with high play count, this marks the artist as saturated.",
         )
+        if is_lastfm:
+            min_albums = st.number_input(
+                "Albums per artist before purging (only applies to Last.fm uploads — Spotify exports don't include album data)",
+                min_value=1, max_value=50, step=1,
+                value=p.get("min_unique_albums", 3),
+                help="Familiarity across 3+ albums suggests catalog depth, not just greatest-hits exposure. An artist with 20 tracks all from one album is not truly saturated.",
+            )
+        else:
+            min_albums = 0   # not applicable for Spotify
         min_track_plays = st.number_input(
             "Min plays per track to qualify for anchor pool",
             min_value=1, max_value=100, step=1,
@@ -628,6 +644,7 @@ def step_parameters():
             st.session_state.params = {
                 "max_artist_plays":  int(max_plays),
                 "max_unique_tracks": int(max_tracks),
+                "min_unique_albums": int(min_albums),
                 "min_track_plays":   int(min_track_plays),
                 "batch_size":        int(batch_size),
                 "anchor_pool_size":  int(anchor_size),
@@ -723,6 +740,7 @@ def step_anchor_pool():
                     blacklist=state.blacklist,
                     collision_memory=state.collision_memory,
                     min_track_plays=p["min_track_plays"],
+                    min_unique_albums=p.get("min_unique_albums", 0),
                     freshness_penalties=state.freshness_penalties(),
                 )
                 st.session_state.anchor_pool = pool
@@ -911,7 +929,7 @@ def step_run():
 | Source | {st.session_state.source.capitalize()} |
 | Lane | {st.session_state.lane} |
 | Vibe focus | {st.session_state.vibe_focus or '—'} |
-| Purge | ≥ {p['max_artist_plays']} plays or ≥ {p['max_unique_tracks']} unique tracks |
+| Purge | ≥ {p['max_artist_plays']} plays **and** ≥ {p['max_unique_tracks']} unique tracks{f" **and** ≥ {p['min_unique_albums']} albums" if p.get('min_unique_albums') and st.session_state.get('source') == 'lastfm' else ''} |
 | Batch size | {p['batch_size']} songs |
 | Anchor pool | {len(pool.tracks)} tracks |
 """)

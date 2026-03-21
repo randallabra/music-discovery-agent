@@ -20,6 +20,7 @@ class ArtistStats:
     total_plays: int
     unique_tracks: int
     top_tracks: list[tuple[str, int]]  # [(track_name, plays), ...] descending
+    unique_albums: int = 0             # distinct album titles seen (Last.fm only; 0 for Spotify)
 
 
 @dataclass
@@ -77,6 +78,7 @@ def parse_history_csv(csv_path: Path, source: str) -> tuple[dict[str, ArtistStat
     Returns (artist_stats_dict, total_scrobbles, resolved_format_label).
     """
     plays: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    albums: dict[str, set[str]] = defaultdict(set)   # artist -> set of album titles (Last.fm only)
     total = 0
     skipped = 0
 
@@ -97,6 +99,11 @@ def parse_history_csv(csv_path: Path, source: str) -> tuple[dict[str, ArtistStat
                 continue
             plays[artist][track] += 1
             total += 1
+            # Capture album name for Last.fm rows (column is "album")
+            if fmt == "lastfm":
+                album = (row.get("album") or "").strip()
+                if album:
+                    albums[artist].add(album.lower())
 
     if skipped and skipped > total * 0.1:
         print(f"  Note: skipped {skipped:,} rows (missing artist/track or short Spotify plays)")
@@ -109,6 +116,7 @@ def parse_history_csv(csv_path: Path, source: str) -> tuple[dict[str, ArtistStat
             total_plays=sum(track_map.values()),
             unique_tracks=len(track_map),
             top_tracks=top,
+            unique_albums=len(albums.get(artist, set())),
         )
 
     return stats, total, fmt
@@ -125,26 +133,40 @@ def purge_artists(
     stats: dict[str, ArtistStats],
     max_artist_plays: int,
     max_unique_tracks: int,
-    blacklist: set[str],  # normalized (lower) names
+    blacklist: set[str],        # normalized (lower) names
+    min_unique_albums: int = 0, # 0 = not applicable (Spotify); >0 = Last.fm album depth check
 ) -> tuple[dict[str, ArtistStats], list[str]]:
     """
     Returns (eligible, purged_names).
-    Purge criteria (any one is sufficient):
-      - total_plays >= max_artist_plays   (you know this artist cold)
-      - unique_tracks >= max_unique_tracks (broad utility listening, not a taste signal)
+
+    Instant-purge (either is sufficient — these are not taste signals):
       - utility keywords in artist name
       - artist in explicit blacklist
+
+    Saturation purge — ALL of the following must be true simultaneously:
+      - total_plays >= max_artist_plays      (high play count)
+      - unique_tracks >= max_unique_tracks   (broad track familiarity)
+      - unique_albums >= min_unique_albums   (deep catalog familiarity — Last.fm only;
+                                             skipped when min_unique_albums == 0)
+
+    AND logic prevents purging artists you've sampled widely but don't deeply know,
+    e.g. 10 tracks from a greatest hits (low album diversity) should not trigger purge.
     """
     eligible: dict[str, ArtistStats] = {}
     purged: list[str] = []
 
     for name, s in stats.items():
-        if (
-            s.total_plays >= max_artist_plays
-            or s.unique_tracks >= max_unique_tracks
-            or _is_utility(name)
-            or name.strip().lower() in blacklist
-        ):
+        # Instant purge — utility/ambient content or explicit blacklist
+        if _is_utility(name) or name.strip().lower() in blacklist:
+            purged.append(name)
+            continue
+
+        # Saturation purge — must clear ALL active thresholds
+        saturated_plays  = s.total_plays >= max_artist_plays
+        saturated_tracks = s.unique_tracks >= max_unique_tracks
+        saturated_albums = (min_unique_albums == 0) or (s.unique_albums >= min_unique_albums)
+
+        if saturated_plays and saturated_tracks and saturated_albums:
             purged.append(name)
         else:
             eligible[name] = s
@@ -216,6 +238,7 @@ def process_history(
     blacklist: set[str],
     collision_memory: list[dict],
     min_track_plays: int = 8,
+    min_unique_albums: int = 0,   # 0 = not applicable (Spotify); >0 = Last.fm only
     freshness_penalties: dict[str, float] | None = None,
     verbose: bool = False,
 ) -> AnchorPool:
@@ -224,7 +247,9 @@ def process_history(
     fmt_label = {"lastfm": "Last.fm", "spotify_basic": "Spotify", "spotify_extended": "Spotify Extended"}.get(fmt, fmt)
     print(f"  Source: {fmt_label}  |  {total_scrobbles:,} plays  |  {len(stats):,} unique artists")
 
-    eligible, purged = purge_artists(stats, max_artist_plays, max_unique_tracks, blacklist)
+    eligible, purged = purge_artists(
+        stats, max_artist_plays, max_unique_tracks, blacklist, min_unique_albums
+    )
     print(f"  Purged {len(purged):,} saturated/utility/blacklisted artists")
     print(f"  {len(eligible):,} artists eligible")
 
