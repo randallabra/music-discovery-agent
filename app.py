@@ -1023,59 +1023,88 @@ def _execute_run():
 
 
 def _show_results(result: RecommendationResult):
-    import pandas as pd
-
     recs = result.recommendations
     st.success(f"**{len(recs)} recommendations generated** — {result.tokens_used:,} tokens used")
 
-    # Table
-    rows = []
-    for i, r in enumerate(recs, 1):
-        rows.append({
-            "#": i,
-            "Artist": r.artist,
-            "Track": r.track,
-            "DCS": f"{r.dcs_score:.2f}" if r.dcs_score else "—",
-            "Rationale": r.rationale,
-        })
-    df = pd.DataFrame(rows).set_index("#")
-    st.dataframe(df, use_container_width=True, height=460)
+    # ── Reset track selection when a new result arrives ───────────────────
+    result_id = id(result)
+    if st.session_state.get("_result_id") != result_id:
+        st.session_state["_result_id"] = result_id
+        for i in range(len(recs)):
+            st.session_state[f"track_sel_{i}"] = True
+
+    # ── Checkbox track table ───────────────────────────────────────────────
+    st.markdown("**Select tracks to include in your playlist** — all selected by default:")
+
+    # Header row
+    h0, h1, h2, h3, h4 = st.columns([0.35, 1.8, 2.2, 0.55, 5])
+    h0.markdown("<small>**✓**</small>", unsafe_allow_html=True)
+    h1.markdown("<small>**Artist**</small>", unsafe_allow_html=True)
+    h2.markdown("<small>**Track**</small>", unsafe_allow_html=True)
+    h3.markdown("<small>**DCS**</small>", unsafe_allow_html=True)
+    h4.markdown("<small>**Rationale**</small>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin:4px 0 6px 0'>", unsafe_allow_html=True)
+
+    for i, r in enumerate(recs):
+        c0, c1, c2, c3, c4 = st.columns([0.35, 1.8, 2.2, 0.55, 5])
+        with c0:
+            st.checkbox("", key=f"track_sel_{i}", label_visibility="collapsed")
+        c1.markdown(f"<small>{r.artist}</small>", unsafe_allow_html=True)
+        c2.markdown(f"<small>{r.track}</small>", unsafe_allow_html=True)
+        c3.markdown(
+            f"<small>{r.dcs_score:.2f}</small>" if r.dcs_score else "<small>—</small>",
+            unsafe_allow_html=True,
+        )
+        c4.markdown(f"<small>{r.rationale}</small>", unsafe_allow_html=True)
+
+    # Count selected
+    selected_recs = [r for i, r in enumerate(recs) if st.session_state.get(f"track_sel_{i}", True)]
+    n_sel = len(selected_recs)
+    st.markdown(f"<small>*{n_sel} of {len(recs)} tracks selected*</small>", unsafe_allow_html=True)
+
+    fname = _default_output()
 
     st.markdown("---")
-    soundiiz_csv = _recs_to_soundiiz_csv(recs)
-    detail_csv   = _recs_to_detail_csv(recs)
-    fname        = _default_output()
 
-    st.markdown("**Download**")
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button(
-            "⬇  Soundiiz CSV",
-            data=soundiiz_csv,
-            file_name=fname,
-            mime="text/csv",
-            use_container_width=True,
-            type="primary",
-        )
-    with dl2:
-        st.download_button(
-            "⬇  Full detail CSV",
-            data=detail_csv,
-            file_name=fname.replace(".csv", "_detail.csv"),
-            mime="text/csv",
-            use_container_width=True,
-        )
+    # ── 1. Send to Spotify (primary action) ───────────────────────────────
+    if st.button("🎵  Send to Spotify  →", type="primary", use_container_width=True):
+        # Store the filtered list so the Export step only pushes selected tracks
+        st.session_state["_export_recs_override"] = selected_recs
+        _go(9)
 
     st.markdown("")
-    act1, act2 = st.columns(2)
-    with act1:
-        if st.button("🎵  Send to Spotify  →", type="primary", use_container_width=True):
-            _go(9)
-    with act2:
-        if st.button("Run again  →", use_container_width=True):
-            st.session_state.result = None
-            st.session_state.anchor_pool = None
-            _go(6)  # back to Lane selection
+
+    # ── 2. Soundiiz CSV (alternative streaming apps) ──────────────────────
+    st.markdown(
+        "If you'd like to create the playlist within another streaming app, download "
+        "the playlist here and run it through Soundiiz to push to Apple Music, "
+        "Amazon Music, Tidal, etc."
+    )
+    soundiiz_csv = _recs_to_soundiiz_csv(selected_recs)
+    st.download_button(
+        "⬇  Download Soundiiz CSV",
+        data=soundiiz_csv,
+        file_name=fname,
+        mime="text/csv",
+    )
+
+    st.markdown("")
+
+    # ── 3. Full Detail CSV ────────────────────────────────────────────────
+    detail_csv = _recs_to_detail_csv(selected_recs)
+    st.download_button(
+        "⬇  Full Detail CSV",
+        data=detail_csv,
+        file_name=fname.replace(".csv", "_detail.csv"),
+        mime="text/csv",
+    )
+
+    st.markdown("")
+    if st.button("Run again  →"):
+        st.session_state.result = None
+        st.session_state.anchor_pool = None
+        st.session_state.pop("_export_recs_override", None)
+        _go(6)  # back to Lane selection
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1094,7 +1123,8 @@ def step_export():
             _go(8)
         return
 
-    recs = result.recommendations
+    # Use the user-filtered track list if they unchecked any tracks on the results screen
+    recs = st.session_state.get("_export_recs_override") or result.recommendations
     lane = st.session_state.get("lane") or getattr(result, "_lane_hint", "") or "Music Discovery"
 
     # ── Read Spotify credentials from secrets (never hard-code) ──────────

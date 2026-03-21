@@ -120,11 +120,18 @@ Stage 3 — Score + rank by DCSv2.
 
 ## VIBE_FOCUS Interpretation (when present in run configuration)
 VIBE_FOCUS is a comma-separated list of qualitative descriptors (e.g. "minor key, acoustic, fingerpicked, breezy, atmospheric").
-- Treat each descriptor as an independent OR qualifier, not a required AND condition.
-- A candidate qualifies if it meaningfully matches ANY single descriptor from the list.
-- Never require a track to satisfy the full list simultaneously.
-- Matching descriptors should boost MES scoring when supported by specific critic language.
-- Non-matching candidates are not automatically disqualified — DCSv2 score still governs rank.
+
+VIBE_FOCUS is a soft scoring signal only. It must NEVER reduce batch size or eliminate candidates.
+
+Rules:
+- Treat each descriptor as an independent OR qualifier — a track matches if it fits ANY one descriptor.
+- Never require a track to satisfy multiple descriptors simultaneously.
+- A track that matches one or more descriptors gets a modest MES boost (up to +0.08) when the
+  match is supported by specific critic language or production description.
+- A track with ZERO vibe matches is NOT disqualified. If its DCS score is competitive, include it.
+- A high-DCS track with no vibe match outranks a low-DCS track with a perfect vibe match.
+- The goal is to tilt the ranking slightly toward the vibe — not to filter the candidate pool.
+- Never cite vibe focus as a reason to produce fewer songs than the requested batch size.
 
 ## Anti-Collapse Constraints (non-negotiable)
 - No single era (decade) may exceed 35% of output
