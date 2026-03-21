@@ -460,7 +460,8 @@ def step_history():
     with left:
         st.markdown("#### Last.fm")
         st.markdown(
-            "Export your complete lifetime history instantly at "
+            "If you've previously set up a Last.fm scrobbler to track your streaming activity, "
+            "export your complete lifetime history at "
             "[lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/)\n\n"
             "⏱ Usually ready in under a minute"
         )
@@ -482,9 +483,10 @@ def step_history():
     with right:
         st.markdown("#### Spotify")
         st.markdown(
-            "Request your export at "
+            "You can always request your data directly from Spotify at "
             "[spotify.com/us/account/privacy](https://www.spotify.com/us/account/privacy/)\n\n"
-            "⏱ Up to **5 days** for the past year · up to **30 days** for full lifetime history"
+            "⏱ Could take up to **5 days** to export data from the past year, "
+            "and up to **30 days** to export your listening data across your full lifetime history"
         )
         spotify_file = st.file_uploader(
             "Upload Spotify CSV",
