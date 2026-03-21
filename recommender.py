@@ -330,23 +330,35 @@ def parse_response(raw_text: str) -> list[Recommendation]:
 
 # ---------- Normalization helpers ----------
 
-# Suffixes Claude commonly appends that won't appear in the CSV
-_TRACK_SUFFIX_RE = re.compile(
-    r"\s*[\(\[](remaster(ed)?|re-?master(ed)?|live|acoustic|demo|single"
-    r"|album version|radio edit|bonus track|extended|edit|version|mix"
-    r"|feat\.?.*|ft\.?.*|\d{4})\s*[\)\]].*$",
-    re.IGNORECASE,
-)
-# Leading articles that vary between CSV and Claude output
+# Strip ALL parenthetical/bracketed content — covers (Remastered), [Live],
+# (Live at Madison Square Garden, 2003), (2019 Mix), etc.
+_PARENS_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]", re.IGNORECASE)
+
+# Strip standalone 4-digit years anywhere in the string (e.g. "Song Name 2019")
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+# Strip "remastered" / "remaster" wherever it appears — not a different song
+_REMASTER_RE = re.compile(r"\bre-?master(ed)?\b", re.IGNORECASE)
+
+# Strip leading articles that vary between CSV and Claude output
 _ARTICLE_RE = re.compile(r"^(the|a|an)\s+", re.IGNORECASE)
 
 
 def _normalise(s: str) -> str:
-    """Aggressively normalise a string for fuzzy known-track matching."""
+    """
+    Aggressively normalise a string for fuzzy known-track matching.
+    Case-insensitive. Strips parentheticals, years, 'remastered',
+    leading articles, and punctuation so that:
+      'Lonely Boy (Remastered 2022)' == 'Lonely Boy'
+      'Live at MSG, 2019'            == 'Live at MSG'  (year stripped)
+      'The Black Keys'               == 'Black Keys'
+    """
     s = s.strip().lower()
-    s = _TRACK_SUFFIX_RE.sub("", s)   # strip "(Remastered)", "(Live)", etc.
-    s = _ARTICLE_RE.sub("", s)        # strip leading "The ", "A ", "An "
-    s = re.sub(r"[^\w\s]", "", s)     # strip punctuation
+    s = _PARENS_RE.sub("", s)       # strip ALL (...) and [...] blocks
+    s = _REMASTER_RE.sub("", s)     # strip standalone "remastered" outside brackets
+    s = _YEAR_RE.sub("", s)         # strip standalone 4-digit years
+    s = _ARTICLE_RE.sub("", s)      # strip leading "The ", "A ", "An "
+    s = re.sub(r"[^\w\s]", "", s)   # strip remaining punctuation
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
