@@ -24,12 +24,13 @@ class ArtistStats:
 
 @dataclass
 class AnchorPool:
-    tracks: list[dict]           # [{"artist": ..., "track": ..., "plays": ...}]
-    purged_artists: list[str]    # artists that failed purge
-    eligible_count: int          # artists that passed purge
+    tracks: list[dict]                        # [{"artist": ..., "track": ..., "plays": ...}]
+    purged_artists: list[str]                 # artists that failed purge
+    eligible_count: int                       # artists that passed purge
     total_scrobbles: int
     total_artists: int
-    known_tracks: frozenset      # ALL (artist_lower, track_lower) from full history — used as post-filter
+    known_tracks: frozenset                   # ALL (artist_lower, track_lower) from full history — post-filter
+    known_tracks_by_plays: list[tuple] = None # top 300 (artist, track, plays) — sent to Claude prompt
 
 
 class AnchorPoolTooSmallError(Exception):
@@ -234,11 +235,26 @@ def process_history(
     # Build full known_tracks set from ALL history (before any purge) —
     # used as post-generation safety filter so Claude never recommends
     # a song the user has already heard, even if it's not in the anchor pool.
+    # Raw (artist, track) strings — recommender.py applies normalisation at
+    # match time to handle "The X"/"X" and "(Remastered)" suffix variants.
     known_tracks: frozenset = frozenset(
         (artist.strip().lower(), track.strip().lower())
         for artist, s in stats.items()
         for track, _ in s.top_tracks
     )
+
+    # Also build a play-count lookup for the top known tracks so the Claude
+    # prompt can include an explicit "do not recommend" list for high-play songs.
+    # Sorted descending by plays; capped at 300 for token budget.
+    known_tracks_by_plays: list[tuple[str, str, int]] = sorted(
+        (
+            (artist, track, plays)
+            for artist, s in stats.items()
+            for track, plays in s.top_tracks
+        ),
+        key=lambda x: x[2],
+        reverse=True,
+    )[:300]
 
     anchors = build_anchor_pool(
         eligible, top_tracks_per_artist, anchor_pool_size, collision_set,
@@ -258,4 +274,5 @@ def process_history(
         total_scrobbles=total_scrobbles,
         total_artists=len(stats),
         known_tracks=known_tracks,
+        known_tracks_by_plays=known_tracks_by_plays,
     )

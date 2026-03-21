@@ -193,6 +193,18 @@ def build_user_message(
     else:
         purged_lines = "  (none)"
 
+    # Known tracks — top played songs from full history.
+    # These are songs the user has ALREADY heard, regardless of artist.
+    # Never recommend any of these specific tracks under any circumstances.
+    known = anchor_pool.known_tracks_by_plays or []
+    if known:
+        known_lines = "\n".join(
+            f"  - {artist} — {track} ({plays} plays)"
+            for artist, track, plays in known[:200]  # cap at 200 for token budget
+        )
+    else:
+        known_lines = "  (none)"
+
     if config.vibe_focus:
         vibe_line = (
             f"\nVIBE_FOCUS: {config.vibe_focus}"
@@ -227,6 +239,12 @@ These artists were purged from the anchor pool because the user has heard them t
 Their individual tracks are NOT listed but are part of the user's listening history.
 Never recommend any song by any artist on this list.
 {purged_lines}
+
+## Known Tracks — already in the user's listening history (never recommend)
+These are specific songs the user has already heard, sorted by play count descending.
+Do NOT recommend any of these tracks regardless of artist name formatting variations.
+This is an absolute rule — a track already heard is not a discovery.
+{known_lines}
 
 ---
 Execute the full DCSv2 pipeline (CMP → TGE → score → anti-collapse) for musical lane: \
@@ -310,6 +328,34 @@ def parse_response(raw_text: str) -> list[Recommendation]:
     return recs
 
 
+# ---------- Normalization helpers ----------
+
+# Suffixes Claude commonly appends that won't appear in the CSV
+_TRACK_SUFFIX_RE = re.compile(
+    r"\s*[\(\[](remaster(ed)?|re-?master(ed)?|live|acoustic|demo|single"
+    r"|album version|radio edit|bonus track|extended|edit|version|mix"
+    r"|feat\.?.*|ft\.?.*|\d{4})\s*[\)\]].*$",
+    re.IGNORECASE,
+)
+# Leading articles that vary between CSV and Claude output
+_ARTICLE_RE = re.compile(r"^(the|a|an)\s+", re.IGNORECASE)
+
+
+def _normalise(s: str) -> str:
+    """Aggressively normalise a string for fuzzy known-track matching."""
+    s = s.strip().lower()
+    s = _TRACK_SUFFIX_RE.sub("", s)   # strip "(Remastered)", "(Live)", etc.
+    s = _ARTICLE_RE.sub("", s)        # strip leading "The ", "A ", "An "
+    s = re.sub(r"[^\w\s]", "", s)     # strip punctuation
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _make_known_set(known_tracks: frozenset) -> set[tuple[str, str]]:
+    """Build a normalised lookup set from the raw known_tracks frozenset."""
+    return {(_normalise(a), _normalise(t)) for a, t in known_tracks}
+
+
 # ---------- Post-filter against state ----------
 
 def filter_against_state(
@@ -322,18 +368,19 @@ def filter_against_state(
     Checks against:
       1. Collision memory (previously recommended tracks)
       2. Blacklist (explicitly excluded artists)
-      3. known_tracks (full listening history — catches songs Claude
-         recommended that the user has already heard, even if not in
-         the anchor pool or collision memory)
+      3. known_tracks (full listening history) — checked with aggressive
+         normalisation so "The Black Keys" matches "Black Keys", and
+         "Lonely Boy (Remastered)" matches "Lonely Boy".
     """
+    known_normalised = _make_known_set(known_tracks)
     filtered = []
     for r in recs:
-        key = (r.artist.strip().lower(), r.track.strip().lower())
         if state.is_blacklisted(r.artist):
             continue
         if state.in_collision_memory(r.artist, r.track):
             continue
-        if key in known_tracks:
+        norm_key = (_normalise(r.artist), _normalise(r.track))
+        if norm_key in known_normalised:
             continue
         filtered.append(r)
     return filtered
