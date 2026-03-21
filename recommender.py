@@ -242,8 +242,15 @@ Never recommend any song by any artist on this list.
 
 ## Known Tracks — already in the user's listening history (never recommend)
 These are specific songs the user has already heard, sorted by play count descending.
-Do NOT recommend any of these tracks regardless of artist name formatting variations.
-This is an absolute rule — a track already heard is not a discovery.
+TWO absolute rules apply:
+  1. Do NOT recommend any track listed here, regardless of artist name formatting.
+  2. Do NOT recommend any song whose TITLE appears in this list, even by a different
+     artist. If the user knows "Song to the Siren" via This Mortal Coil, do not
+     recommend the Tim Buckley original or any other recording of it — the song is
+     familiar regardless of who performed it. Covers are not discoveries.
+     EXCEPTION: two songs that share a title but have different songwriters (e.g.
+     "Elephant" by Tame Impala and "Elephant" by Jason Isbell) are genuinely
+     different songs and may both be considered.
 {known_lines}
 
 ---
@@ -374,17 +381,20 @@ def filter_against_state(
     recs: list[Recommendation],
     state: ProjectState,
     known_tracks: frozenset = frozenset(),
+    known_titles: frozenset = frozenset(),
 ) -> list[Recommendation]:
     """
     Safety net: remove anything Claude missed.
     Checks against:
       1. Collision memory (previously recommended tracks)
       2. Blacklist (explicitly excluded artists)
-      3. known_tracks (full listening history) — checked with aggressive
-         normalisation so "The Black Keys" matches "Black Keys", and
-         "Lonely Boy (Remastered)" matches "Lonely Boy".
+      3. known_tracks (artist + title) — fuzzy normalised match
+      4. known_titles (title only, any artist) — blocks covers:
+         if "Song to the Siren" is known via This Mortal Coil,
+         the Tim Buckley original is also blocked.
     """
     known_normalised = _make_known_set(known_tracks)
+    known_titles_normalised = {_normalise(t) for t in known_titles}
     filtered = []
     for r in recs:
         if state.is_blacklisted(r.artist):
@@ -394,6 +404,8 @@ def filter_against_state(
         norm_key = (_normalise(r.artist), _normalise(r.track))
         if norm_key in known_normalised:
             continue
+        if _normalise(r.track) in known_titles_normalised:
+            continue   # title known under a different artist — cover blocked
         filtered.append(r)
     return filtered
 
@@ -410,7 +422,11 @@ def get_recommendations(
     raw_text, tokens = call_claude(config, anchor_pool, state, client)
 
     recs = parse_response(raw_text)
-    recs = filter_against_state(recs, state, anchor_pool.known_tracks)
+    recs = filter_against_state(
+        recs, state,
+        known_tracks=anchor_pool.known_tracks,
+        known_titles=anchor_pool.known_titles or frozenset(),
+    )
 
     print(f"  {len(recs)} recommendations parsed | {tokens:,} tokens used")
     return RecommendationResult(

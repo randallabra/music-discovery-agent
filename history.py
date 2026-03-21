@@ -31,6 +31,7 @@ class AnchorPool:
     total_artists: int
     known_tracks: frozenset                   # ALL (artist_lower, track_lower) from full history — post-filter
     known_tracks_by_plays: list[tuple] = None # top 300 (artist, track, plays) — sent to Claude prompt
+    known_titles: frozenset = None            # normalised track titles only — cross-artist cover filter
 
 
 class AnchorPoolTooSmallError(Exception):
@@ -256,6 +257,17 @@ def process_history(
         reverse=True,
     )[:300]
 
+    # Build title-only set aggregating plays across ALL artists for each title.
+    # Used to block covers: if "Song to the Siren" is known via This Mortal Coil,
+    # the Tim Buckley original is also blocked — same song, different recording.
+    # Titles are stored raw (lowercase) here; normalisation applied at match time.
+    _title_plays: dict[str, int] = {}
+    for artist, s in stats.items():
+        for track, plays in s.top_tracks:
+            key = track.strip().lower()
+            _title_plays[key] = _title_plays.get(key, 0) + plays
+    known_titles: frozenset = frozenset(_title_plays.keys())
+
     anchors = build_anchor_pool(
         eligible, top_tracks_per_artist, anchor_pool_size, collision_set,
         min_track_plays, freshness_penalties=freshness_penalties,
@@ -275,4 +287,5 @@ def process_history(
         total_artists=len(stats),
         known_tracks=known_tracks,
         known_tracks_by_plays=known_tracks_by_plays,
+        known_titles=known_titles,
     )
