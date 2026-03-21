@@ -42,6 +42,7 @@ STEP_LABELS = [
     "Lane",
     "Anchor Pool",
     "Run",
+    "Export",
 ]
 
 def _init():
@@ -66,12 +67,84 @@ def _init():
         "new_blacklist":    [],        # artists to add this session
         "output_filename":  "",
         "result":           None,      # RecommendationResult
+        # Spotify export state — reset each session; never pre-filled
+        "spotify_token":    None,      # token dict from Spotipy exchange
+        "spotify_user":     None,      # dict from sp.current_user()
+        "spotify_push_result": None,   # result dict from push_playlist()
+        "spotify_auth_error":  "",     # human-readable error string
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 _init()
+
+
+# ─────────────────────────────────────────────────────────────
+#  Spotify OAuth callback — runs on every script execution
+#  Must come before any step rendering so that the ?code= param
+#  is captured immediately when Spotify redirects back.
+# ─────────────────────────────────────────────────────────────
+
+def _spotify_secrets() -> tuple[str, str, str]:
+    """Return (client_id, client_secret, redirect_uri) from secrets, or ('','','')."""
+    try:
+        cid  = st.secrets.get("SPOTIFY_CLIENT_ID",     "") or ""
+        sec  = st.secrets.get("SPOTIFY_CLIENT_SECRET", "") or ""
+        ruri = st.secrets.get("SPOTIFY_REDIRECT_URI",  "http://localhost:8501/") or ""
+        return cid, sec, ruri
+    except Exception:
+        return "", "", "http://localhost:8501/"
+
+
+def _handle_spotify_callback():
+    """
+    Detect Spotify's authorization redirect (?code=...&state=profile_name),
+    exchange the code for a token, and restore the user's session state.
+    The Spotify OAuth `state` parameter carries the profile name so we can
+    reload the saved results file after the mandatory page refresh.
+    """
+    code    = st.query_params.get("code")
+    profile = st.query_params.get("state", "")   # we encode profile name here
+
+    if not code:
+        return
+    if st.session_state.get("spotify_token"):
+        # Already exchanged — just clear the URL params
+        st.query_params.clear()
+        return
+
+    client_id, client_secret, redirect_uri = _spotify_secrets()
+    if not client_id or not client_secret:
+        st.query_params.clear()
+        return
+
+    try:
+        from spotify_push import make_oauth, exchange_code as _exc, make_client, get_current_user
+        oauth      = make_oauth(client_id, client_secret, redirect_uri)
+        token_info = _exc(oauth, code)
+        sp         = make_client(token_info["access_token"])
+        user       = get_current_user(sp)
+        st.session_state.spotify_token = token_info
+        st.session_state.spotify_user  = user
+    except Exception as e:
+        st.session_state.spotify_auth_error = str(e)
+        st.query_params.clear()
+        return
+
+    # Restore session from disk so the Export step has something to work with
+    if profile:
+        st.session_state.project = profile
+        sf = _state_dir() / f"{profile}.json"
+        if sf.exists():
+            st.session_state.state_obj = load_state(sf)
+        last = _load_last_result(profile)
+        if last:
+            st.session_state.result = last
+            st.session_state.lane   = last._lane_hint  # stored at save time
+
+    st.query_params.clear()
+    st.session_state.step = 9   # jump straight to Export
 
 
 # ─────────────────────────────────────────────────────────────
@@ -107,6 +180,71 @@ def _default_output() -> str:
     if state:
         run = state.run_count + 1
     return f"{p}_{l}_run{run}.csv"
+
+def _save_last_result(profile: str, result, lane: str) -> None:
+    """
+    Persist the recommendation result to disk so it survives the Spotify OAuth
+    page redirect (which resets Streamlit session state).
+    """
+    import json
+    path = _state_dir() / f"{profile}_last_result.json"
+    _state_dir().mkdir(parents=True, exist_ok=True)
+    data = {
+        "profile": profile,
+        "lane": lane,
+        "recommendations": [
+            {
+                "artist":    r.artist,
+                "track":     r.track,
+                "dcs_score": r.dcs_score,
+                "cls_score": r.cls_score,
+                "cms_score": r.cms_score,
+                "mes_score": r.mes_score,
+                "rationale": r.rationale,
+            }
+            for r in result.recommendations
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def _load_last_result(profile: str):
+    """
+    Load the last saved result from disk. Returns a RecommendationResult-like
+    object (with a ._lane_hint attribute carrying the lane name), or None.
+    """
+    import json
+    from recommender import Recommendation, RecommendationResult
+    path = _state_dir() / f"{profile}_last_result.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        recs = [
+            Recommendation(
+                artist    = r["artist"],
+                track     = r["track"],
+                dcs_score = r.get("dcs_score"),
+                cls_score = r.get("cls_score"),
+                cms_score = r.get("cms_score"),
+                mes_score = r.get("mes_score"),
+                rationale = r.get("rationale", ""),
+            )
+            for r in data.get("recommendations", [])
+        ]
+        result = RecommendationResult(
+            recommendations=recs,
+            raw_response="(restored from disk)",
+            tokens_used=0,
+            model="(restored)",
+        )
+        result._lane_hint = data.get("lane", "")
+        return result
+    except Exception:
+        return None
+
 
 def _recs_to_soundiiz_csv(recs: list) -> str:
     buf = io.StringIO()
@@ -872,6 +1010,13 @@ def _execute_run():
     save_state(state, _state_file(st.session_state.project))
     st.session_state.state_obj = state
     st.session_state.result = result
+
+    # Save to disk so results survive the Spotify OAuth redirect
+    try:
+        _save_last_result(st.session_state.project, result, config.lane)
+    except Exception:
+        pass  # non-fatal — Spotify export will just show a note
+
     st.rerun()
 
 
@@ -895,13 +1040,12 @@ def _show_results(result: RecommendationResult):
     st.dataframe(df, use_container_width=True, height=460)
 
     st.markdown("---")
-    st.markdown("**Download**")
-    dl1, dl2, _, run_again = st.columns([1, 1, 1, 1])
-
     soundiiz_csv = _recs_to_soundiiz_csv(recs)
     detail_csv   = _recs_to_detail_csv(recs)
     fname        = _default_output()
 
+    st.markdown("**Download**")
+    dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
             "⬇  Soundiiz CSV",
@@ -919,11 +1063,246 @@ def _show_results(result: RecommendationResult):
             mime="text/csv",
             use_container_width=True,
         )
-    with run_again:
+
+    st.markdown("")
+    act1, act2 = st.columns(2)
+    with act1:
+        if st.button("🎵  Send to Spotify  →", type="primary", use_container_width=True):
+            _go(9)
+    with act2:
         if st.button("Run again  →", use_container_width=True):
             st.session_state.result = None
             st.session_state.anchor_pool = None
             _go(6)  # back to Lane selection
+
+
+# ─────────────────────────────────────────────────────────────
+#  Step 9 — Export (Spotify push + Soundiiz instructions)
+# ─────────────────────────────────────────────────────────────
+
+def step_export():
+    from datetime import date
+
+    st.subheader("Step 9 — Export Your Playlist")
+
+    result = st.session_state.result
+    if not result:
+        st.warning("No recommendations found in this session. Please run the generator first.")
+        if st.button("← Back to Run"):
+            _go(8)
+        return
+
+    recs = result.recommendations
+    lane = st.session_state.get("lane") or getattr(result, "_lane_hint", "") or "Music Discovery"
+
+    # ── Read Spotify credentials from secrets (never hard-code) ──────────
+    client_id, client_secret, redirect_uri = _spotify_secrets()
+    spotify_configured = bool(client_id and client_secret)
+
+    left, divider_col, right = st.columns([10, 0.08, 10], gap="small")
+
+    # ══════════════════════════════════════════════════════════
+    #  LEFT — Spotify
+    # ══════════════════════════════════════════════════════════
+    with left:
+        st.markdown("### 🎧 Push to Spotify")
+
+        if not spotify_configured:
+            st.info(
+                "**Spotify not configured.**\n\n"
+                "To enable direct Spotify push, add these three keys to your "
+                "`.streamlit/secrets.toml` and the Streamlit Cloud dashboard:\n\n"
+                "```toml\n"
+                "SPOTIFY_CLIENT_ID     = \"your_client_id\"\n"
+                "SPOTIFY_CLIENT_SECRET = \"your_client_secret\"\n"
+                "SPOTIFY_REDIRECT_URI  = \"http://localhost:8501/\"\n"
+                "```\n\n"
+                "Register a free app at "
+                "[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) "
+                "to get these credentials."
+            )
+
+        elif st.session_state.get("spotify_push_result"):
+            # ── Already pushed ────────────────────────────────────────────
+            pr = st.session_state.spotify_push_result
+            n_found = len(pr["found"])
+            n_total = len(recs)
+            st.success(
+                f"**Playlist created in Spotify** — {n_found} of {n_total} tracks added"
+            )
+            st.markdown(
+                f"### [🎵 Open \"{pr['playlist_name']}\" in Spotify]({pr['playlist_url']})",
+                unsafe_allow_html=False,
+            )
+
+            if pr["not_found"]:
+                st.markdown(f"**{len(pr['not_found'])} tracks not found on Spotify:**")
+                for t in pr["not_found"]:
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;• {t}", unsafe_allow_html=True)
+                st.caption(
+                    "These tracks may be unavailable in your region, "
+                    "released under a different title on Spotify, or "
+                    "not yet in Spotify's catalog."
+                )
+
+            st.markdown("")
+            if st.button("Push another playlist", use_container_width=True):
+                st.session_state.spotify_push_result = None
+                st.session_state.spotify_token = None
+                st.session_state.spotify_user  = None
+                st.rerun()
+
+        elif st.session_state.get("spotify_token"):
+            # ── Connected — show playlist form ───────────────────────────
+            user = st.session_state.spotify_user or {}
+            display = user.get("display_name") or user.get("id") or "Spotify User"
+            st.success(f"✓ Connected as **{display}**")
+            st.markdown("")
+
+            default_name = (
+                f"Music Discovery — {lane} — {date.today().strftime('%b %Y')}"
+            )
+            playlist_name = st.text_input(
+                "Playlist name",
+                value=default_name,
+                max_chars=100,
+            )
+            playlist_desc = st.text_input(
+                "Description *(optional)*",
+                value=f"Generated by Music Discovery Agent · {lane} lane · {len(recs)} tracks",
+                max_chars=300,
+                label_visibility="visible",
+            )
+            public = st.checkbox("Make playlist public", value=True)
+            st.markdown("")
+
+            if st.button(
+                f"Create playlist with {len(recs)} tracks →",
+                type="primary",
+                use_container_width=True,
+                disabled=not playlist_name.strip(),
+            ):
+                token_info = st.session_state.spotify_token
+                user_id    = (st.session_state.spotify_user or {}).get("id", "")
+                prog = st.progress(0)
+                status_msg = st.empty()
+
+                def _on_track_progress(i, total):
+                    prog.progress(i / total)
+                    status_msg.caption(f"Searching Spotify: {i} / {total} tracks…")
+
+                try:
+                    from spotify_push import make_client, push_playlist
+                    sp = make_client(token_info["access_token"])
+                    push_result = push_playlist(
+                        sp=sp,
+                        user_id=user_id,
+                        name=playlist_name.strip(),
+                        description=playlist_desc.strip(),
+                        recs=recs,
+                        public=public,
+                        progress_callback=_on_track_progress,
+                    )
+                    prog.empty()
+                    status_msg.empty()
+                    st.session_state.spotify_push_result = push_result
+                    st.rerun()
+                except Exception as e:
+                    prog.empty()
+                    status_msg.empty()
+                    st.error(f"**Spotify error:** {e}")
+
+        else:
+            # ── Not connected — show auth flow ───────────────────────────
+            if st.session_state.get("spotify_auth_error"):
+                st.error(
+                    f"**Connection failed:** {st.session_state.spotify_auth_error}\n\n"
+                    "Check your Spotify credentials in secrets.toml and try again."
+                )
+                st.session_state.spotify_auth_error = ""
+
+            st.markdown(
+                "Connect your Spotify account to create this playlist directly. "
+                "You'll be prompted to log in — **no credentials are stored between sessions**."
+            )
+            st.markdown("")
+
+            profile = st.session_state.get("project", "user")
+            from spotify_push import make_oauth, get_auth_url
+            oauth   = make_oauth(client_id, client_secret, redirect_uri)
+            url     = get_auth_url(oauth, state=profile)   # state = profile name for session recovery
+
+            st.markdown(
+                f"""<a href="{url}" target="_self"
+                style="display:inline-block;padding:0.55rem 1.4rem;background:#1DB954;
+                       color:#000;font-weight:700;border-radius:6px;text-decoration:none;
+                       font-size:0.95rem;">
+                Connect to Spotify →
+                </a>""",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Clicking Connect will briefly redirect you to Spotify's login page. "
+                "Your recommendations are saved and will be ready when you return."
+            )
+
+    # ── Divider ──────────────────────────────────────────────────────────
+    with divider_col:
+        st.markdown(
+            "<div style='border-left:1px solid #333;min-height:640px;'></div>",
+            unsafe_allow_html=True,
+        )
+
+    # ══════════════════════════════════════════════════════════
+    #  RIGHT — CSV download + Soundiiz instructions
+    # ══════════════════════════════════════════════════════════
+    with right:
+        st.markdown("### 📂 Download & Import via Soundiiz")
+        st.markdown(
+            "Prefer a different streaming service? Download the Soundiiz CSV "
+            "and use [soundiiz.com](https://soundiiz.com) — a free web tool that imports "
+            "playlists to **Spotify, Apple Music, Amazon Music, Tidal, YouTube Music**, and more."
+        )
+
+        soundiiz_csv = _recs_to_soundiiz_csv(recs)
+        fname = _default_output()
+        st.download_button(
+            "⬇  Download Soundiiz CSV",
+            data=soundiiz_csv,
+            file_name=fname,
+            mime="text/csv",
+            use_container_width=True,
+            type="primary",
+        )
+        detail_csv = _recs_to_detail_csv(recs)
+        st.download_button(
+            "⬇  Download full detail CSV",
+            data=detail_csv,
+            file_name=fname.replace(".csv", "_detail.csv"),
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        st.markdown("")
+        st.markdown("#### How to import via Soundiiz")
+        st.markdown(
+            """
+1. **Download** the Soundiiz CSV above (two-column: Artist, Track)
+2. Go to **[soundiiz.com](https://soundiiz.com)** and sign in or create a free account
+3. In the top nav, click **Transfer → Import from file**
+4. Choose **CSV** as the file format and upload the file you downloaded
+5. Soundiiz will match your tracks — review the results
+6. Select your **destination platform** (Spotify, Apple Music, Amazon Music, Tidal, etc.)
+7. Click **Transfer** — your new playlist appears in the app of your choice
+
+*Soundiiz's free tier supports up to 200 tracks per playlist.*
+"""
+        )
+
+    # ── Back button ──────────────────────────────────────────────────────
+    st.markdown("")
+    if st.button("← Back to results"):
+        _go(8)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -963,6 +1342,7 @@ def _sidebar():
 #  Router
 # ─────────────────────────────────────────────────────────────
 
+_handle_spotify_callback()   # must run before sidebar/steps so OAuth redirect is captured
 _sidebar()
 _progress_bar()
 
@@ -975,3 +1355,4 @@ elif step == 5: step_blacklist()
 elif step == 6: step_lane()
 elif step == 7: step_anchor_pool()
 elif step == 8: step_run()
+elif step == 9: step_export()
