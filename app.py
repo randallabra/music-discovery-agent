@@ -585,16 +585,16 @@ def step_parameters():
     with left:
         st.markdown("**Artist purge thresholds**")
         max_plays = st.number_input(
-            "Max plays per artist before purging as 'saturated'",
+            "Plays per artist before purging as 'saturated'",
             min_value=10, max_value=10000, step=10,
             value=p["max_artist_plays"],
-            help="Artists at or above this total are purged as 'saturated.' At 200, an artist you've played 200+ times is considered fully known, and so the agent will not recommend new songs by that artist.",
+            help="Artists at or above this total are purged as 'saturated.' At 200, an artist you've played 200+ times is considered fully known, and the agent will not recommend new songs by them.",
         )
         max_tracks = st.number_input(
-            "Max unique tracks per artist before purging",
+            "Unique tracks per artist before purging",
             min_value=1, max_value=200, step=1,
             value=p["max_unique_tracks"],
-            help="If you've heard this many distinct tracks by an artist, they're purged regardless of play count.",
+            help="If you've heard this many distinct tracks by an artist, they're purged regardless of total play count — breadth of familiarity is itself a signal of saturation.",
         )
         min_track_plays = st.number_input(
             "Min plays per track to qualify for anchor pool",
