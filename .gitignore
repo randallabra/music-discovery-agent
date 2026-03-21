@@ -1,0 +1,29 @@
+# Secrets — never commit
+.streamlit/secrets.toml
+.streamlit/
+
+# Personal listening history CSVs
+*.csv
+
+# User state (blacklist, collision memory)
+~/.music-agent/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv
+venv/
+
+# macOS
+.DS_Store
+
+# One-time build scripts and output
+tag_sample_out/
+build_doc.py
+
+# Word documents (source docs, not app files)
+*.docx
