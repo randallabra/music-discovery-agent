@@ -91,10 +91,12 @@ def _spotify_secrets() -> tuple[str, str, str]:
     try:
         cid  = st.secrets.get("SPOTIFY_CLIENT_ID",     "") or ""
         sec  = st.secrets.get("SPOTIFY_CLIENT_SECRET", "") or ""
-        ruri = st.secrets.get("SPOTIFY_REDIRECT_URI",  "http://localhost:8501/") or ""
+        # Local:  http://127.0.0.1:8501/   (Spotify accepts loopback IP for dev)
+        # Cloud:  https://music-discovery-agent.streamlit.app/
+        ruri = st.secrets.get("SPOTIFY_REDIRECT_URI",  "") or ""
         return cid, sec, ruri
     except Exception:
-        return "", "", "http://localhost:8501/"
+        return "", "", ""
 
 
 def _handle_spotify_callback():
@@ -1097,7 +1099,7 @@ def step_export():
 
     # ── Read Spotify credentials from secrets (never hard-code) ──────────
     client_id, client_secret, redirect_uri = _spotify_secrets()
-    spotify_configured = bool(client_id and client_secret)
+    spotify_configured = bool(client_id and client_secret and redirect_uri)
 
     left, divider_col, right = st.columns([10, 0.08, 10], gap="small")
 
@@ -1110,16 +1112,19 @@ def step_export():
         if not spotify_configured:
             st.info(
                 "**Spotify not configured.**\n\n"
-                "To enable direct Spotify push, add these three keys to your "
-                "`.streamlit/secrets.toml` and the Streamlit Cloud dashboard:\n\n"
+                "To enable direct Spotify push, add these three keys to "
+                "`.streamlit/secrets.toml` (local) and the Streamlit Cloud dashboard:\n\n"
                 "```toml\n"
                 "SPOTIFY_CLIENT_ID     = \"your_client_id\"\n"
                 "SPOTIFY_CLIENT_SECRET = \"your_client_secret\"\n"
-                "SPOTIFY_REDIRECT_URI  = \"http://localhost:8501/\"\n"
+                "# Local:\n"
+                "SPOTIFY_REDIRECT_URI  = \"http://127.0.0.1:8501/\"\n"
+                "# Cloud (use this value in Streamlit Cloud dashboard):\n"
+                "# SPOTIFY_REDIRECT_URI = \"https://music-discovery-agent.streamlit.app/\"\n"
                 "```\n\n"
-                "Register a free app at "
-                "[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) "
-                "to get these credentials."
+                "Register both redirect URIs at "
+                "[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard). "
+                "Spotify accepts `http://127.0.0.1` (loopback IP) for local development."
             )
 
         elif st.session_state.get("spotify_push_result"):
