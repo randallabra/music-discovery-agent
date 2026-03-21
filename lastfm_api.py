@@ -7,14 +7,71 @@ No OAuth required — read-only calls with API key only.
 """
 from __future__ import annotations
 
+import json
+import threading
 import time
 import urllib.parse
 import urllib.request
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 _RATE_LIMIT_DELAY = 0.22   # ~4.5 req/s, safely under Last.fm's 5 req/s limit
+_MAX_WORKERS     = 4       # concurrent requests — stays safely under rate limit
+
+# ─────────────────────────────────────────────────────────────
+#  Persistent tag cache
+#  Saves fetched tags to disk so repeat runs skip the API entirely.
+# ─────────────────────────────────────────────────────────────
+
+_CACHE_FILE    = Path.home() / ".music-agent" / "lastfm_tag_cache.json"
+_CACHE_VERSION = 2   # bump to invalidate old cache formats
+
+
+def _load_tag_cache() -> dict:
+    try:
+        raw = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("_v") == _CACHE_VERSION:
+            return raw
+    except Exception:
+        pass
+    return {"_v": _CACHE_VERSION}
+
+
+def _save_tag_cache(cache: dict) -> None:
+    try:
+        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_FILE.write_text(json.dumps(cache), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _track_cache_key(artist: str, track: str) -> str:
+    return f"t:{artist.lower().strip()}|||{track.lower().strip()}"
+
+
+def _artist_cache_key(artist: str) -> str:
+    return f"a:{artist.lower().strip()}"
+
+
+# ─────────────────────────────────────────────────────────────
+#  Rate limiter — serialises the START of each request across
+#  threads so we never exceed ~4.5 req/s globally.
+# ─────────────────────────────────────────────────────────────
+
+_rate_lock      = threading.Lock()
+_last_call_time: list[float] = [0.0]
+
+
+def _rate_limited_fetch(params: dict) -> list[tuple[str, int]]:
+    with _rate_lock:
+        now  = time.time()
+        wait = _RATE_LIMIT_DELAY - (now - _last_call_time[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_time[0] = time.time()
+    return _fetch_tags(params)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -192,30 +249,81 @@ def fetch_pool_lane_fits(
     Falls back to artist.getTopTags when track tags are sparse (< 3 tags).
     Returns enriched track list with 'lane_fit' and 'lane_score' keys,
     sorted High → Medium → blank, sub-sorted by plays descending.
-    """
-    # Cache artist tags so we don't re-fetch for every track by the same artist
-    artist_tag_cache: dict[str, list[tuple[str, int]]] = {}
 
-    enriched = []
+    Performance:
+    - Persistent disk cache (~/.music-agent/lastfm_tag_cache.json) —
+      cached tracks skip the API entirely; repeat runs are near-instant.
+    - Up to 4 parallel requests with a shared rate limiter so total
+      throughput stays safely under Last.fm's 5 req/s limit.
+    """
+    disk_cache:       dict = _load_tag_cache()
+    artist_mem_cache: dict = {}          # in-memory artist tag cache this session
+    cache_lock    = threading.Lock()
+    counter: list[int] = [0]
     total = len(tracks)
 
-    for i, t in enumerate(tracks):
-        tags = get_track_tags(t["artist"], t["track"], api_key)
-        time.sleep(_RATE_LIMIT_DELAY)
+    def _fetch_one(t: dict) -> dict:
+        tk = _track_cache_key(t["artist"], t["track"])
 
-        # Fallback to artist tags if track returned fewer than 3 usable tags
-        if len(tags) < 3:
-            artist_key = t["artist"].lower().strip()
-            if artist_key not in artist_tag_cache:
-                artist_tag_cache[artist_key] = get_artist_tags(t["artist"], api_key)
-                time.sleep(_RATE_LIMIT_DELAY)
-            tags = artist_tag_cache[artist_key]
+        # ── 1. Disk cache hit — no API call needed ────────────────────────
+        with cache_lock:
+            cached = disk_cache.get(tk)
+        if cached is not None:
+            tags = cached
+        else:
+            # ── 2. Fetch track-level tags ─────────────────────────────────
+            tags = _rate_limited_fetch({
+                "method":      "track.getTopTags",
+                "artist":      t["artist"],
+                "track":       t["track"],
+                "api_key":     api_key,
+                "autocorrect": "1",
+            })
+
+            # ── 3. Fallback to artist tags if sparse ──────────────────────
+            if len(tags) < 3:
+                ak = _artist_cache_key(t["artist"])
+                with cache_lock:
+                    artist_tags = artist_mem_cache.get(ak) or disk_cache.get(ak)
+                if artist_tags is None:
+                    artist_tags = _rate_limited_fetch({
+                        "method":      "artist.getTopTags",
+                        "artist":      t["artist"],
+                        "api_key":     api_key,
+                        "autocorrect": "1",
+                    })
+                    with cache_lock:
+                        artist_mem_cache[ak] = artist_tags
+                        disk_cache[ak]       = artist_tags
+                if len(artist_tags) > len(tags):
+                    tags = artist_tags
+
+            # ── 4. Persist to disk cache ──────────────────────────────────
+            with cache_lock:
+                disk_cache[tk] = tags
 
         score = lane_fit_score(tags, lane)
-        enriched.append({**t, "lane_fit": lane_fit_label(score), "lane_score": score})
 
+        # Thread-safe progress update
+        with cache_lock:
+            counter[0] += 1
+            n = counter[0]
         if progress_callback:
-            progress_callback(i + 1, total)
+            progress_callback(n, total)
+
+        return {**t, "lane_fit": lane_fit_label(score), "lane_score": score}
+
+    # ── Parallel execution ────────────────────────────────────────────────────
+    enriched: list[dict] = []
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as executor:
+        futures = [executor.submit(_fetch_one, t) for t in tracks]
+        for future in as_completed(futures):
+            try:
+                enriched.append(future.result())
+            except Exception:
+                pass  # skip a failed track rather than crashing the whole pool
+
+    _save_tag_cache(disk_cache)
 
     order = {"High": 0, "Medium": 1, "": 2}
     enriched.sort(key=lambda r: (order[r["lane_fit"]], -r["plays"]))
