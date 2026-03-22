@@ -72,6 +72,126 @@ LANES: list[dict] = [
 FEATURE_COLS = ["energy", "valence", "acousticness", "danceability",
                 "instrumentalness", "tempo_norm", "mode"]
 
+# ── Tag-based lane vocabulary (22 lanes) ─────────────────────────────────────
+# Used when Spotify Audio Features are unavailable.
+# Each lane maps to a set of Last.fm tags that are characteristic of that lane.
+# Tags are matched against the top-15 tags returned by Last.fm for each track.
+LANE_TAGS: dict[str, set[str]] = {
+    "Melancholy Balladry": {
+        "melancholic", "melancholy", "sad", "mellow", "piano", "ballad",
+        "slowcore", "tearjerker", "heartbreak", "grief", "dirge",
+        "soft", "gentle", "quiet", "depressing", "sadness", "lullaby",
+    },
+    "Introspective Songcraft": {
+        "singer-songwriter", "folk", "folk rock", "americana", "alt-country",
+        "country rock", "freak folk", "chamber folk", "storytelling",
+        "confessional", "acoustic", "indie folk", "folk pop",
+        "psychedelic folk", "anti-folk",
+    },
+    "Hook-Perfected Songs": {
+        "power pop", "bubblegum", "new wave", "synth-pop", "pop rock",
+        "motown", "girl group", "catchy", "art pop", "k-pop",
+        "jangle pop", "twee pop", "sunshine pop", "baroque pop",
+        "chamber pop", "indie pop",
+    },
+    "Atmospheric / Texture-First": {
+        "ambient", "drone", "krautrock", "soundscape", "avant-garde",
+        "neoclassical", "modern classical", "microsound", "ambient pop",
+        "electronic", "electronica", "trip-hop", "post-rock",
+        "experimental", "noise", "minimalism",
+    },
+    "Dark Textured Rock / Pop": {
+        "post-punk", "gothic rock", "darkwave", "cold wave", "goth",
+        "gothic", "dark", "ethereal wave", "new wave", "batcave",
+        "shoegaze", "dream pop", "dark pop", "4ad", "ethereal",
+        "noise pop", "dark wave",
+    },
+    "Roots and Traditional": {
+        "country", "bluegrass", "americana", "roots rock", "folk blues",
+        "blues", "traditional country", "old-time", "appalachian",
+        "mountain music", "roots", "delta blues", "acoustic blues",
+        "country blues", "gospel", "cajun", "zydeco",
+    },
+    "Propulsive Guitar Rock": {
+        "garage rock", "art punk", "post-punk revival", "jangle pop",
+        "post-punk", "college rock", "noise rock", "indie rock",
+        "alternative rock", "lo-fi", "guitar rock", "proto-punk",
+        "power trio", "raw",
+    },
+    "Groove-First Rock": {
+        "funk rock", "funk", "southern rock", "rock and roll",
+        "british invasion", "progressive rock", "boogie", "blues rock",
+        "jam band", "swamp rock", "classic rock", "60s", "70s",
+        "rhythm and blues", "pub rock",
+    },
+    "Energy-First Rock": {
+        "hard rock", "arena rock", "classic rock", "grunge", "seattle",
+        "alternative metal", "post-grunge", "mainstream rock",
+        "stadium rock", "stoner rock", "desert rock", "heavy psych",
+    },
+    "Adrenaline Rock": {
+        "thrash metal", "death metal", "black metal", "grindcore",
+        "sludge metal", "doom metal", "heavy metal", "metal",
+        "hardcore", "post-hardcore", "metalcore", "heavy",
+        "speed metal", "crust punk", "crossover thrash",
+    },
+    "Melody-Anchored Hip-Hop": {
+        "alternative hip hop", "conscious hip hop", "jazz rap",
+        "hip hop soul", "neo soul", "hip hop", "hip-hop",
+        "abstract hip hop", "underground hip hop",
+    },
+    "Groove-First Hip-Hop": {
+        "g-funk", "bounce", "gangsta rap", "boom bap", "dirty south",
+        "hip hop", "hip-hop", "rap", "west coast rap", "trap",
+        "crunk", "snap music",
+    },
+    "Textural / Atmospheric Hip-Hop": {
+        "cloud rap", "chillhop", "instrumental hip hop", "lo-fi hip hop",
+        "hip hop", "hip-hop", "ambient rap", "experimental hip hop",
+        "drone rap", "lo fi",
+    },
+    "Melody-Led Jazz": {
+        "bebop", "cool jazz", "hard bop", "vocal jazz", "standards",
+        "big band", "jazz", "swing", "traditional jazz", "jazz vocal",
+        "mainstream jazz", "bop",
+    },
+    "Harmonic-First Jazz": {
+        "post-bop", "modal jazz", "fusion", "contemporary jazz", "jazz",
+        "smooth jazz", "crossover jazz", "jazz fusion", "electric jazz",
+    },
+    "Expansive Jazz": {
+        "free jazz", "avant-garde jazz", "spiritual jazz", "jazz",
+        "experimental jazz", "out jazz", "loft jazz", "free improvisation",
+    },
+    "Rhythm-Forward Jazz": {
+        "latin jazz", "afrobeat", "bossa nova", "samba", "jazz funk",
+        "jazz", "cuban jazz", "afro-cuban", "jazz samba", "mambo",
+        "salsa", "cumbia",
+    },
+    "Ambient Jazz": {
+        "ambient jazz", "nu jazz", "acoustic jazz", "chamber jazz",
+        "quiet", "gentle", "jazz", "impressionist", "new age",
+    },
+    "Modern Pop": {
+        "pop", "electropop", "teen pop", "dance pop", "art pop",
+        "bedroom pop", "hyperpop", "synth pop", "viral", "tiktok",
+    },
+    "Urban / Contemporary R&B": {
+        "r&b", "rnb", "contemporary r&b", "urban", "neo soul",
+        "soul", "quiet storm", "new jack swing", "alternative r&b",
+    },
+    "Dance / Electronic": {
+        "house", "techno", "edm", "electronic dance", "club",
+        "dance", "disco", "electro", "trance", "deep house",
+        "tech house", "progressive house", "drum and bass", "dubstep",
+    },
+    "Soul / Classic R&B": {
+        "soul", "r&b", "classic soul", "motown", "funk",
+        "gospel", "rhythm and blues", "old school r&b", "northern soul",
+        "deep soul", "southern soul",
+    },
+}
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 MUSIC_AGENT_DIR = Path.home() / ".music-agent"
 LASTFM_CACHE    = MUSIC_AGENT_DIR / "lastfm_tag_cache.json"
@@ -401,22 +521,55 @@ def assign_lane(feat: dict) -> str:
     return best_lane
 
 
+# ── Tag-based lane scoring (used when audio features unavailable) ──────────────
+
+def score_lane_from_tags(tags: list[tuple[str, int]], lane_name: str) -> float:
+    """
+    Score a track's Last.fm tags against a lane's tag vocabulary.
+    Returns 0.0–1.0: weighted overlap of top-15 tags against the lane set.
+    Identical logic to lastfm_api.lane_fit_score().
+    """
+    target = LANE_TAGS.get(lane_name, set())
+    if not target or not tags:
+        return 0.0
+    top = tags[:15]
+    total_weight = sum(count for _, count in top)
+    if total_weight == 0:
+        return 0.0
+    matched = sum(count for tag, count in top if tag in target)
+    return matched / total_weight
+
+
+def assign_lane_from_tags(tags: list[tuple[str, int]]) -> tuple[str, float]:
+    """Returns (best_lane_name, score) using tag-based scoring."""
+    best_lane  = "Unclassified"
+    best_score = 0.0
+    for lane_name in LANE_TAGS:
+        s = score_lane_from_tags(tags, lane_name)
+        if s > best_score:
+            best_score = s
+            best_lane  = lane_name
+    return best_lane, round(best_score, 3)
+
+
 # ── k-means clustering ────────────────────────────────────────────────────────
 
 def cluster_tracks(metadata: dict[str, dict], n_clusters: int = 22) -> dict[str, int]:
     """
-    Run k-means on Spotify audio features.
+    Run k-means clustering. Uses Spotify audio features when available;
+    falls back to TF-IDF on Last.fm tags when features are absent.
     Returns {track_key: cluster_id}.
-    Features: energy, valence, acousticness, danceability,
-              instrumentalness, tempo_norm (0-1), mode.
     """
-    keys, vectors = [], []
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    # ── Try audio-feature vectors first ──────────────────────────────────────
+    af_keys, af_vecs = [], []
     for k, v in metadata.items():
         af = v.get("audio_features")
         if not af:
             continue
         tempo_norm = min(af.get("tempo", 120) / 220.0, 1.0)
-        vec = [
+        af_vecs.append([
             af.get("energy",           0.5),
             af.get("valence",          0.5),
             af.get("acousticness",     0.5),
@@ -424,22 +577,44 @@ def cluster_tracks(metadata: dict[str, dict], n_clusters: int = 22) -> dict[str,
             af.get("instrumentalness", 0.0),
             tempo_norm,
             float(af.get("mode", 0.5)),
-        ]
-        keys.append(k)
-        vectors.append(vec)
+        ])
+        af_keys.append(k)
 
-    if len(vectors) < n_clusters:
-        print(f"  Only {len(vectors)} enriched tracks — reducing clusters to {len(vectors)//2}")
-        n_clusters = max(2, len(vectors) // 2)
+    if len(af_vecs) >= n_clusters:
+        X = np.array(af_vecs, dtype=float)
+        Xs = StandardScaler().fit_transform(X)
+        labels = KMeans(n_clusters=n_clusters, n_init=20, random_state=42).fit(Xs).labels_
+        return {k: int(c) for k, c in zip(af_keys, labels)}
 
-    X      = np.array(vectors, dtype=float)
-    scaler = StandardScaler()
-    Xs     = scaler.fit_transform(X)
+    # ── Fall back to TF-IDF on Last.fm tags ───────────────────────────────────
+    tag_keys, tag_docs = [], []
+    for k, v in metadata.items():
+        tags = v.get("lastfm_tags") or []
+        if not tags:
+            continue
+        # Build a pseudo-document: repeat each tag by its weight
+        doc = " ".join(
+            tag.replace(" ", "_") for tag, count in tags[:15]
+            for _ in range(max(1, count // 10))
+        )
+        tag_docs.append(doc)
+        tag_keys.append(k)
 
-    km = KMeans(n_clusters=n_clusters, n_init=20, random_state=42)
-    km.fit(Xs)
+    if len(tag_docs) < n_clusters:
+        print(f"  Only {len(tag_docs)} tagged tracks — reducing clusters to {max(2, len(tag_docs)//3)}")
+        n_clusters = max(2, len(tag_docs) // 3)
 
-    return {k: int(c) for k, c in zip(keys, km.labels_)}
+    if not tag_docs:
+        print("  No audio features or tags available for clustering — skipping")
+        return {}
+
+    print(f"  Clustering {len(tag_docs):,} tracks on TF-IDF tag vectors (k={n_clusters}) ...")
+    vec  = TfidfVectorizer(max_features=500, sublinear_tf=True)
+    Xtf  = vec.fit_transform(tag_docs)
+    # Convert to dense for KMeans (manageable at 12K × 500)
+    Xd   = Xtf.toarray()
+    labels = KMeans(n_clusters=n_clusters, n_init=15, random_state=42).fit(Xd).labels_
+    return {k: int(c) for k, c in zip(tag_keys, labels)}
 
 
 # ── Output helpers ────────────────────────────────────────────────────────────
@@ -471,31 +646,32 @@ def _format_cluster_report(metadata: dict, clusters: dict[str, int],
                 tag_counter[tag] += count
         top_tags = [t for t, _ in tag_counter.most_common(15)]
 
-        # Top-down lane assignment for this cluster
-        if afs:
-            lane_votes: Counter = Counter()
-            for af in afs:
-                lane_votes[assign_lane(af)] += 1
-            dominant_lane = lane_votes.most_common(1)[0][0]
-        else:
-            dominant_lane = "Unknown"
+        # Lane assignment — prefer stored lane, fall back to audio features, then tags
+        lane_votes: Counter = Counter()
+        for _, v in members:
+            stored = v.get("lane")
+            if stored and stored != "Unclassified":
+                lane_votes[stored] += 1
+            elif v.get("audio_features"):
+                lane_votes[assign_lane(v["audio_features"])] += 1
+            elif v.get("lastfm_tags"):
+                lane_votes[assign_lane_from_tags(v["lastfm_tags"])[0]] += 1
+        dominant_lane = lane_votes.most_common(1)[0][0] if lane_votes else "Unknown"
 
         lines.append(f"\n{'='*70}")
         lines.append(f"CLUSTER {cid}  |  {len(members)} tracks  "
                      f"|  Dominant lane: {dominant_lane}")
-        lines.append(f"  Audio features (median): {medians}")
+        if medians:
+            lines.append(f"  Audio features (median): {medians}")
         lines.append(f"  Top tags: {', '.join(top_tags)}")
         lines.append(f"\n  Top 30 by plays (for AllMusic / manual lookup):")
         for rank, (key, v) in enumerate(top30, 1):
             artist, track = key.split("|||", 1)
-            af = v.get("audio_features") or {}
-            lane = assign_lane(af) if af else "—"
-            lines.append(f"  {rank:2d}. [{v['plays']:3d}x] {artist} — {track}")
-            lines.append(f"       lane={lane}  "
-                         f"E={af.get('energy','?'):.2f}  "
-                         f"V={af.get('valence','?'):.2f}  "
-                         f"A={af.get('acousticness','?'):.2f}  "
-                         f"D={af.get('danceability','?'):.2f}" if af else "")
+            lane = v.get("lane", "—")
+            if not lane or lane == "Unclassified":
+                tags = v.get("lastfm_tags") or []
+                lane = assign_lane_from_tags(tags)[0] if tags else "—"
+            lines.append(f"  {rank:2d}. [{v['plays']:3d}x] {artist} — {track}  [{lane}]")
     return "\n".join(lines)
 
 
@@ -519,11 +695,14 @@ def main():
     ap = argparse.ArgumentParser(description="Enrich listening history with Spotify audio features.")
     ap.add_argument("--csv",     required=True, help="Path to Last.fm or Spotify history CSV")
     ap.add_argument("--profile", required=True, help="Profile name (e.g. marlonrando)")
+    ap.add_argument("--skip-spotify", action="store_true", help="Skip Spotify ID search + audio features (use when API access is blocked)")
     ap.add_argument("--skip-mb",   action="store_true", help="Skip MusicBrainz year lookup")
     ap.add_argument("--skip-lfm",  action="store_true", help="Skip Last.fm tag fetch")
     ap.add_argument("--clusters",  type=int, default=22, help="k-means cluster count (default 22)")
+    ap.add_argument("--min-plays", type=int, default=3,
+                    help="Minimum play count to include a track (default 3)")
     ap.add_argument("--limit",     type=int, default=0,
-                    help="Only enrich first N unique tracks (0=all, useful for testing)")
+                    help="Only enrich first N unique tracks after min-plays filter (0=all, useful for testing)")
     args = ap.parse_args()
 
     csv_path    = Path(args.csv)
@@ -544,9 +723,11 @@ def main():
     print(f"\n[1/4] Loading history from {csv_path.name} ...")
     history = load_history(csv_path)
     all_keys = sorted(history.keys(), key=lambda k: -history[k]["plays"])
+    all_keys = [k for k in all_keys if history[k]["plays"] >= args.min_plays]
     if args.limit:
         all_keys = all_keys[:args.limit]
     print(f"      {len(history):,} unique tracks total  |  "
+          f"{len(all_keys):,} with >= {args.min_plays} plays  |  "
           f"processing {len(all_keys):,}")
 
     # Load existing metadata (checkpoint resume)
@@ -555,80 +736,84 @@ def main():
     lfm_cache: dict            = _load_json(LASTFM_CACHE)
 
     # ── Phase 2: Spotify IDs + Audio Features ─────────────────────────────────
-    print(f"\n[2/4] Fetching Spotify audio features ...")
-    token = _spotify_client_token(spotify_id, spotify_sec)
-    token_time = time.time()
+    _do_spotify = not args.skip_spotify and bool(spotify_id) and bool(spotify_sec)
+    if not _do_spotify:
+        print(f"\n[2/4] Spotify skipped")
+        _save_json(SPOTIFY_CACHE, sp_cache)
+    if _do_spotify:
+        print(f"\n[2/4] Fetching Spotify audio features ...")
+        token = _spotify_client_token(spotify_id, spotify_sec)
+        token_time = time.time()
 
-    def _refresh_token_if_needed():
-        nonlocal token, token_time
-        if time.time() - token_time > 3000:   # refresh before 3600s expiry
-            token      = _spotify_client_token(spotify_id, spotify_sec)
-            token_time = time.time()
+        def _refresh_token_if_needed():
+            nonlocal token, token_time
+            if time.time() - token_time > 3000:
+                token      = _spotify_client_token(spotify_id, spotify_sec)
+                token_time = time.time()
 
-    # Step 2a: resolve Spotify IDs for tracks that don't have them yet
-    need_id = [(artist, track) for (artist, track) in all_keys
-               if f"{artist.lower().strip()}|||{track.lower().strip()}" not in sp_cache]
+        # Step 2a: resolve Spotify IDs
+        need_id = [(artist, track) for (artist, track) in all_keys
+                   if f"{artist.lower().strip()}|||{track.lower().strip()}" not in sp_cache]
+        print(f"      Searching Spotify IDs for {len(need_id):,} tracks "
+              f"({len(all_keys)-len(need_id):,} cached) ...")
 
-    print(f"      Searching Spotify IDs for {len(need_id):,} tracks "
-          f"({len(all_keys)-len(need_id):,} cached) ...")
+        def _search_one(pair):
+            artist, track = pair
+            _refresh_token_if_needed()
+            return (artist, track), search_spotify_id(artist, track, token, sp_cache)
 
-    def _search_one(pair):
-        artist, track = pair
-        _refresh_token_if_needed()
-        return (artist, track), search_spotify_id(artist, track, token, sp_cache)
+        done = 0
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(_search_one, pair): pair for pair in need_id}
+            for fut in as_completed(futs):
+                done += 1
+                if done % 500 == 0 or done == len(need_id):
+                    print(f"      ... searched {done:,}/{len(need_id):,}", end="\r")
+        print()
+        _save_json(SPOTIFY_CACHE, sp_cache)
 
-    done = 0
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(_search_one, pair): pair for pair in need_id}
-        for fut in as_completed(futs):
-            done += 1
-            if done % 500 == 0 or done == len(need_id):
-                print(f"      ... searched {done:,}/{len(need_id):,}", end="\r")
-    print()
+    # Step 2b: batch-fetch audio features (only when Spotify is enabled)
+    if _do_spotify:
+        keys_needing_features = [
+            (artist, track) for (artist, track) in all_keys
+            if (f"{artist}|||{track}" not in metadata or
+                not metadata[f"{artist}|||{track}"].get("audio_features"))
+            and sp_cache.get(f"{artist.lower().strip()}|||{track.lower().strip()}")
+        ]
+        sid_batches = []
+        batch: list[tuple] = []
+        for artist, track in keys_needing_features:
+            ck  = f"{artist.lower().strip()}|||{track.lower().strip()}"
+            sid = sp_cache.get(ck)
+            if sid:
+                batch.append((f"{artist}|||{track}", sid))
+            if len(batch) == 100:
+                sid_batches.append(batch); batch = []
+        if batch:
+            sid_batches.append(batch)
 
-    _save_json(SPOTIFY_CACHE, sp_cache)
-
-    # Step 2b: batch-fetch audio features for tracks with a Spotify ID
-    keys_needing_features = [
-        (artist, track) for (artist, track) in all_keys
-        if (f"{artist}|||{track}" not in metadata or
-            not metadata[f"{artist}|||{track}"].get("audio_features"))
-        and sp_cache.get(f"{artist.lower().strip()}|||{track.lower().strip()}")
-    ]
-    sid_batches = []
-    batch: list[tuple] = []
-    for artist, track in keys_needing_features:
-        ck  = f"{artist.lower().strip()}|||{track.lower().strip()}"
-        sid = sp_cache.get(ck)
-        if sid:
-            batch.append((f"{artist}|||{track}", sid))
-        if len(batch) == 100:
-            sid_batches.append(batch); batch = []
-    if batch:
-        sid_batches.append(batch)
-
-    print(f"      Fetching audio features in {len(sid_batches)} batches ...")
-    feat_count = 0
-    for i, batch in enumerate(sid_batches):
-        _refresh_token_if_needed()
-        ids   = [sid for _, sid in batch]
-        feats = fetch_audio_features_batch(ids, token)
-        for (key, sid), feat in zip(batch, [feats.get(s) for s in ids]):
-            if feat:
-                if key not in metadata:
-                    metadata[key] = {}
-                metadata[key]["audio_features"] = {
-                    k: feat[k] for k in
-                    ["energy","valence","acousticness","danceability",
-                     "instrumentalness","tempo","mode","loudness",
-                     "speechiness","liveness","key","time_signature"]
-                    if k in feat
-                }
-                feat_count += 1
-        if (i+1) % 10 == 0 or (i+1) == len(sid_batches):
-            print(f"      ... batch {i+1}/{len(sid_batches)}  "
-                  f"({feat_count} features stored)", end="\r")
-    print()
+        print(f"      Fetching audio features in {len(sid_batches)} batches ...")
+        feat_count = 0
+        for i, batch in enumerate(sid_batches):
+            _refresh_token_if_needed()
+            ids   = [sid for _, sid in batch]
+            feats = fetch_audio_features_batch(ids, token)
+            for (key, sid), feat in zip(batch, [feats.get(s) for s in ids]):
+                if feat:
+                    if key not in metadata:
+                        metadata[key] = {}
+                    metadata[key]["audio_features"] = {
+                        k: feat[k] for k in
+                        ["energy","valence","acousticness","danceability",
+                         "instrumentalness","tempo","mode","loudness",
+                         "speechiness","liveness","key","time_signature"]
+                        if k in feat
+                    }
+                    feat_count += 1
+            if (i+1) % 10 == 0 or (i+1) == len(sid_batches):
+                print(f"      ... batch {i+1}/{len(sid_batches)}  "
+                      f"({feat_count} features stored)", end="\r")
+        print()
 
     # ── Phase 3: MusicBrainz year ─────────────────────────────────────────────
     if not args.skip_mb:
@@ -693,6 +878,29 @@ def main():
         _save_json(LASTFM_CACHE, lfm_cache)
     else:
         print(f"\n[4/4] Last.fm tags skipped")
+
+    # ── Tag-based lane assignment (runs after Last.fm fetch) ──────────────────
+    print(f"\n[Lane scoring] Assigning tracks to lanes from Last.fm tags ...")
+    lane_counts: Counter = Counter()
+    for key, v in metadata.items():
+        tags = v.get("lastfm_tags") or []
+        af   = v.get("audio_features")
+        if af:
+            lane = assign_lane(af)
+            score = 0.0
+        elif tags:
+            lane, score = assign_lane_from_tags(tags)
+        else:
+            lane, score = "Unclassified", 0.0
+        v["lane"]       = lane
+        v["lane_score"] = score
+        lane_counts[lane] += 1
+
+    print(f"  Lane distribution:")
+    total_scored = len(metadata)
+    for lane, cnt in sorted(lane_counts.items(), key=lambda x: -x[1]):
+        bar = "█" * int(cnt / total_scored * 50)
+        print(f"    {lane:<38s} {cnt:4d}  {bar}")
 
     # Merge play counts and album data into metadata
     for (artist, track), hist in history.items():
