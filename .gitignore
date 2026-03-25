@@ -27,3 +27,7 @@ build_doc.py
 
 # Word documents (source docs, not app files)
 *.docx
+/music-agent/.claude/settings.local.json
+
+# Claude Code project settings
+.claude/
