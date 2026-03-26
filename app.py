@@ -1118,7 +1118,20 @@ def _execute_run(pool, state, p, api_key):
 
 def _show_results(result: RecommendationResult):
     recs = result.recommendations
-    st.success(f"**{len(recs)} recommendations generated** — {result.tokens_used:,} tokens used")
+    batch_size = st.session_state.get("params", {}).get("batch_size", len(recs))
+    n_backfill = sum(1 for r in recs if r.backfill)
+    n_confident = len(recs) - n_backfill
+
+    # Header summary
+    summary = f"**{len(recs)} recommendations generated** — {result.tokens_used:,} tokens used"
+    st.success(summary)
+
+    if n_backfill:
+        st.info(
+            f"**{n_confident} tracks** met full confidence thresholds. "
+            f"**{n_backfill} track{'s' if n_backfill != 1 else ''} backfilled** "
+            f"to reach your requested batch of {batch_size} — shown with a ↓ marker below."
+        )
 
     result_id = id(result)
     if st.session_state.get("_result_id") != result_id:
@@ -1127,6 +1140,11 @@ def _show_results(result: RecommendationResult):
             st.session_state[f"track_sel_{i}"] = True
 
     st.markdown("**Select tracks to include in your playlist** — all selected by default:")
+    st.markdown(
+        "<small style='color:#888'>DCS = Discovery Confidence Score &nbsp;|&nbsp; "
+        "↓ = backfilled to meet batch size</small>",
+        unsafe_allow_html=True,
+    )
 
     h0, h1, h2, h3, h4 = st.columns([0.35, 1.8, 2.2, 0.55, 5])
     h0.markdown("<small>**✓**</small>",          unsafe_allow_html=True)
@@ -1140,8 +1158,14 @@ def _show_results(result: RecommendationResult):
         c0, c1, c2, c3, c4 = st.columns([0.35, 1.8, 2.2, 0.55, 5])
         with c0:
             st.checkbox("", key=f"track_sel_{i}", label_visibility="collapsed")
-        c1.markdown(f"<small>{r.artist}</small>",  unsafe_allow_html=True)
-        c2.markdown(f"<small>{r.track}</small>",   unsafe_allow_html=True)
+        artist_label = f"<small>{r.artist}</small>"
+        track_label  = (
+            f"<small style='color:#aaa'>{r.track} ↓</small>"
+            if r.backfill else
+            f"<small>{r.track}</small>"
+        )
+        c1.markdown(artist_label, unsafe_allow_html=True)
+        c2.markdown(track_label,  unsafe_allow_html=True)
         c3.markdown(
             f"<small>{r.dcs_score:.2f}</small>" if r.dcs_score else "<small>—</small>",
             unsafe_allow_html=True)
@@ -1291,6 +1315,9 @@ def step_export():
             )
             st.caption("Clicking Connect will briefly redirect you to Spotify's login page. "
                        "Your recommendations are saved and will be ready when you return.")
+            with st.expander("🔍 Debug: OAuth URL (temporary)"):
+                st.caption(f"**Redirect URI in use:** `{redirect_uri}`")
+                st.caption(f"**Full auth URL:** `{url}`")
 
     with divider_col:
         st.markdown("<div style='border-left:1px solid #333;min-height:640px;'></div>",

@@ -23,6 +23,7 @@ class Recommendation:
     cms_score: Optional[str]
     mes_score: Optional[str]
     rationale: str
+    backfill: bool = False
 
 
 @dataclass
@@ -158,8 +159,9 @@ Rules:
   co-listening pattern, or specific critic language). The rationale must be song-level.
 - Quote all string fields with double quotes
 - Rank rows by DCS_Score descending
-- If you cannot reach the requested batch size with credible candidates, produce fewer rows
-  and add a final row with Artist="NOTE", Track="DISCOVERY_EXHAUSTED", DCS_Score=0.00
+- Always produce EXACTLY the requested batch size. If high-confidence candidates run short,
+  backfill with lower-confidence tracks — but start their Rationale field with [BACKFILL].
+  Never produce a DISCOVERY_EXHAUSTED row; always reach the requested count.
 """
 
 
@@ -264,7 +266,8 @@ TWO absolute rules apply:
 Execute the full DCSv2 pipeline (CMP → TGE → score → anti-collapse) for musical lane: \
 **{config.lane}**
 
-Generate exactly {config.batch_size} recommendations (or fewer if discovery space is exhausted).
+Generate exactly {config.batch_size} recommendations. If confident candidates fall short,
+backfill to {config.batch_size} and prefix those rows' Rationale with [BACKFILL].
 Output the CSV block only.
 """
 
@@ -327,7 +330,11 @@ def parse_response(raw_text: str) -> list[Recommendation]:
         if not artist or not track:
             continue
         if artist.upper() == "NOTE":
-            continue  # discovery-exhausted marker
+            continue  # discovery-exhausted marker (legacy — no longer expected)
+
+        raw_rationale = (row.get("Rationale") or "").strip().strip('"')
+        is_backfill = raw_rationale.upper().startswith("[BACKFILL]")
+        clean_rationale = raw_rationale[len("[BACKFILL]"):].strip() if is_backfill else raw_rationale
 
         recs.append(Recommendation(
             artist=artist,
@@ -336,7 +343,8 @@ def parse_response(raw_text: str) -> list[Recommendation]:
             cls_score=row.get("CLS", "").strip(),
             cms_score=row.get("CMS", "").strip(),
             mes_score=row.get("MES", "").strip(),
-            rationale=(row.get("Rationale") or "").strip().strip('"'),
+            rationale=clean_rationale,
+            backfill=is_backfill,
         ))
 
     return recs
