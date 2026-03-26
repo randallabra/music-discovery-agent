@@ -1474,36 +1474,25 @@ def step_export():
         st.markdown("")
         profile = st.session_state.get("project","user")
         from spotify_push import make_oauth, get_auth_url
-        import streamlit.components.v1 as _components
         oauth = make_oauth(client_id, client_secret, redirect_uri)
         url   = get_auth_url(oauth, state=profile)
 
-        # Use a JS-driven button so the click navigates window.top directly —
-        # st.markdown anchor tags with target="_top" can be blocked by Streamlit
-        # Cloud's iframe sandbox policy.
+        # target="_blank" opens Spotify auth in a new tab — the only navigation
+        # that is universally permitted from any iframe/sandbox context.
+        # After auth Spotify redirects the new tab back to the app URL with
+        # ?code=… where _handle_spotify_callback() picks it up automatically.
         _sp_logo = _logo_img(ASSETS_DIR / "logo_spotify.png", max_width="110px")
-        _components.html(f"""
-<style>
-  body {{ margin:0; padding:0; background:transparent; }}
-  .sp-wrap {{ display:flex; align-items:center; gap:18px; }}
-  .sp-btn {{
-    display:inline-flex; align-items:center; gap:10px;
-    background:#1DB954; color:#000; border:none;
-    padding:11px 28px; border-radius:50px;
-    font-size:15px; font-weight:700; cursor:pointer;
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    transition:background 0.15s;
-    white-space:nowrap;
-  }}
-  .sp-btn:hover {{ background:#1ed760; }}
-</style>
-<div class="sp-wrap">
-  {_sp_logo}
-  <button class="sp-btn" onclick="window.top.location.href='{url}'">
-    Connect to Spotify →
-  </button>
-</div>
-""", height=70)
+        if _sp_logo:
+            st.markdown(_sp_logo, unsafe_allow_html=True)
+            st.markdown("")
+        st.markdown(
+            f'<a href="{url}" target="_blank" '
+            f'style="display:inline-block;padding:11px 28px;background:#1DB954;'
+            f'color:#000;font-weight:700;border-radius:50px;text-decoration:none;'
+            f'font-size:15px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">'
+            f'Connect to Spotify →</a>',
+            unsafe_allow_html=True,
+        )
 
         st.caption("Clicking Connect will briefly redirect you to Spotify's login page. "
                    "Your recommendations are saved and will be ready when you return.")
