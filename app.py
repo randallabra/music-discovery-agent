@@ -150,11 +150,14 @@ _init()
 
 @st.cache_data(show_spinner=False)
 def _load_index(profile: str) -> dict:
-    """Load pre-indexed track data for a given profile."""
-    path = AGENT_DIR / f"{profile}_track_index.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f)
+    """Load pre-indexed track data for a given profile.
+    Checks the app directory first (for cloud deployments), then ~/.music-agent/."""
+    app_dir = Path(__file__).parent
+    for path in [app_dir / f"{profile}_track_index.json",
+                 AGENT_DIR / f"{profile}_track_index.json"]:
+        if path.exists():
+            with open(path) as f:
+                return json.load(f)
     return {}
 
 def _filter_index(
@@ -778,7 +781,7 @@ def step_discovery():
         )
 
         st.markdown("")
-        st.markdown("#### Decade  *(best-effort — ~10% of catalog has year data)*")
+        st.markdown("#### Decade  *(~90% of catalog has year data)*")
         decade = st.radio(
             "Decade",
             options=DECADE_OPTIONS,
