@@ -201,7 +201,18 @@ def _filter_index(
             "decade": t.get("decade","—"),
         })
 
-    return sorted(results, key=lambda x: -x["plays"])
+    sorted_results = sorted(results, key=lambda x: -x["plays"])
+
+    # Cap at 2 tracks per artist (highest-played first)
+    artist_counts: dict[str, int] = {}
+    capped = []
+    for t in sorted_results:
+        a = t["artist"]
+        if artist_counts.get(a, 0) < 2:
+            capped.append(t)
+            artist_counts[a] = artist_counts.get(a, 0) + 1
+
+    return capped
 
 # ─────────────────────────────────────────────────────────────
 #  Spotify helpers (unchanged from v1)
@@ -625,10 +636,9 @@ def step_profile():
                 _go(4)
     with right:
         if project:
-            index_path = AGENT_DIR / f"{project}_track_index.json"
+            idx = _load_index(project)
             sf = _state_file(project)
-            if index_path.exists():
-                idx = _load_index(project)
+            if idx:
                 if sf.exists():
                     s = load_state(sf)
                     st.info(
@@ -643,7 +653,8 @@ def step_profile():
             else:
                 st.warning(
                     f"No index found for **{project}**. "
-                    "Run the ingestion workflow first, or upload a listening history CSV."
+                    "The index file `{project}_track_index.json` must be present in the "
+                    "app directory or `~/.music-agent/`."
                 )
 
 # ─────────────────────────────────────────────────────────────
@@ -1083,6 +1094,7 @@ def _execute_run(pool, state, p, api_key):
         lane=lane_str,
         project=st.session_state.project,
         vibe_focus="",
+        decade=st.session_state.get("decade", "Any"),
         max_artist_plays=p["max_artist_plays"],
         max_unique_tracks=p["max_unique_tracks"],
         anchor_pool_size=len(pool),
@@ -1179,26 +1191,55 @@ def _show_results(result: RecommendationResult):
 
     st.markdown("---")
 
-    if st.button("🎵  Send to Spotify  →", type="primary", use_container_width=True):
-        st.session_state["_export_recs_override"] = selected_recs
-        _go(9)
+    export_left, export_right = st.columns([1, 1], gap="large")
 
-    st.markdown("")
-    soundiiz_csv = _recs_to_soundiiz_csv(selected_recs)
-    st.download_button("⬇  Download Soundiiz CSV", data=soundiiz_csv,
-                       file_name=_default_output(), mime="text/csv")
-    st.markdown("")
-    detail_csv = _recs_to_detail_csv(selected_recs)
-    st.download_button("⬇  Full Detail CSV", data=detail_csv,
-                       file_name=_default_output().replace(".csv","_detail.csv"),
-                       mime="text/csv")
-    st.markdown("")
-    if st.button("Run again  →"):
-        st.session_state.result             = None
-        st.session_state.anchor_pool_raw    = None
-        st.session_state.anchor_pool_tracks = None
-        st.session_state.pop("_export_recs_override", None)
-        _go(6)
+    with export_left:
+        _sp_logo = _logo_img(LOGO_SPOTIFY, "120px")
+        if _sp_logo:
+            st.markdown(_sp_logo, unsafe_allow_html=True)
+        if st.button("Send to Spotify →", type="primary", use_container_width=True):
+            st.session_state["_export_recs_override"] = selected_recs
+            _go(9)
+        st.markdown("")
+        detail_csv = _recs_to_detail_csv(selected_recs)
+        st.download_button("⬇  Full Detail CSV", data=detail_csv,
+                           file_name=_default_output().replace(".csv","_detail.csv"),
+                           mime="text/csv", use_container_width=True)
+        st.markdown("")
+        if st.button("Run again →", use_container_width=True):
+            st.session_state.result             = None
+            st.session_state.anchor_pool_raw    = None
+            st.session_state.anchor_pool_tracks = None
+            st.session_state.pop("_export_recs_override", None)
+            _go(6)
+
+    with export_right:
+        _sz_logo = _logo_img(LOGO_SOUNDIIZ, "120px")
+        if _sz_logo:
+            st.markdown(_sz_logo, unsafe_allow_html=True)
+        st.markdown("Not on Spotify? Download below and import via **[soundiiz.com](https://soundiiz.com)**.")
+        soundiiz_csv = _recs_to_soundiiz_csv(selected_recs)
+        st.download_button("⬇  Download Soundiiz CSV", data=soundiiz_csv,
+                           file_name=_default_output(), mime="text/csv",
+                           use_container_width=True, type="primary")
+        st.markdown("")
+        # Platform logos
+        _amz_logo = _logo_img(LOGO_AMAZON, "110px")
+        _apl_logo = _logo_img(LOGO_APPLE,  "110px")
+        if _amz_logo or _apl_logo:
+            logo_row = "".join([
+                f'<div style="flex:1;text-align:center;">{_amz_logo}</div>' if _amz_logo else "",
+                f'<div style="flex:1;text-align:center;">{_apl_logo}</div>' if _apl_logo else "",
+            ])
+            st.markdown(
+                f'<div style="display:flex;gap:1rem;align-items:center;margin:0.4rem 0;">'
+                f'{logo_row}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("Amazon Music · Apple Music · Tidal · YouTube Music")
+        st.markdown("**How to import:** Download CSV → [soundiiz.com](https://soundiiz.com) "
+                    "→ Transfer → Import from file → CSV → pick your platform.")
 
 # ─────────────────────────────────────────────────────────────
 #  Step 9 — Export
@@ -1223,156 +1264,96 @@ def step_export():
     client_id, client_secret, redirect_uri = _spotify_secrets()
     spotify_configured = bool(client_id and client_secret and redirect_uri)
 
-    left, divider_col, right = st.columns([10, 0.08, 10], gap="small")
+    _sp_logo = _logo_img(LOGO_SPOTIFY, "150px")
+    if _sp_logo:
+        st.markdown(_sp_logo, unsafe_allow_html=True)
 
-    with left:
-        # ── Spotify logo header ──
-        _sp_logo = _logo_img(LOGO_SPOTIFY, "150px")
-        if _sp_logo:
-            st.markdown(_sp_logo, unsafe_allow_html=True)
-        else:
-            st.markdown("### Push to Spotify")
-
-        if not spotify_configured:
-            st.info(
-                "**Spotify not configured.**\n\n"
-                "Add to `.streamlit/secrets.toml`:\n\n"
-                "```toml\n"
-                "SPOTIFY_CLIENT_ID     = \"your_client_id\"\n"
-                "SPOTIFY_CLIENT_SECRET = \"your_client_secret\"\n"
-                "SPOTIFY_REDIRECT_URI  = \"http://127.0.0.1:8501/\"\n"
-                "```\n\n"
-                "Register both URIs at "
-                "[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)."
-            )
-        elif st.session_state.get("spotify_push_result"):
-            pr = st.session_state.spotify_push_result
-            st.success(f"**Playlist created** — {len(pr['found'])} of {len(recs)} tracks added")
-            st.markdown(f"### [Open \"{pr['playlist_name']}\" in Spotify]({pr['playlist_url']})")
-            if pr["not_found"]:
-                st.markdown(f"**{len(pr['not_found'])} tracks not found:**")
-                for t in pr["not_found"]:
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;• {t}", unsafe_allow_html=True)
-            st.markdown("")
-            if st.button("Push another playlist", use_container_width=True):
-                st.session_state.spotify_push_result = None
-                st.session_state.spotify_token       = None
-                st.session_state.spotify_user        = None
-                st.rerun()
-        elif st.session_state.get("spotify_token"):
-            user    = st.session_state.spotify_user or {}
-            display = user.get("display_name") or user.get("id") or "Spotify User"
-            st.success(f"✓ Connected as **{display}**")
-            st.markdown("")
-            default_name = f"Music Discovery — {temperature} — {date.today().strftime('%b %Y')}"
-            playlist_name = st.text_input("Playlist name", value=default_name, max_chars=100)
-            playlist_desc = st.text_input(
-                "Description *(optional)*",
-                value=f"Generated by Music Discovery Agent · {temperature} · {len(recs)} tracks",
-                max_chars=300,
-            )
-            public = st.checkbox("Make playlist public", value=True)
-            st.markdown("")
-            if st.button(f"Create playlist with {len(recs)} tracks →", type="primary",
-                         use_container_width=True, disabled=not playlist_name.strip()):
-                token_info = st.session_state.spotify_token
-                user_id    = (st.session_state.spotify_user or {}).get("id","")
-                prog       = st.progress(0)
-                status_msg = st.empty()
-                def _on_progress(i, total):
-                    prog.progress(i/total)
-                    status_msg.caption(f"Searching Spotify: {i} / {total} tracks…")
-                try:
-                    from spotify_push import make_client, push_playlist
-                    sp = make_client(token_info["access_token"])
-                    push_result = push_playlist(
-                        sp=sp, user_id=user_id,
-                        name=playlist_name.strip(), description=playlist_desc.strip(),
-                        recs=recs, public=public, progress_callback=_on_progress,
-                    )
-                    prog.empty(); status_msg.empty()
-                    st.session_state.spotify_push_result = push_result
-                    st.rerun()
-                except Exception as e:
-                    prog.empty(); status_msg.empty()
-                    st.error(f"**Spotify error:** {e}")
-        else:
-            if st.session_state.get("spotify_auth_error"):
-                st.error(f"**Connection failed:** {st.session_state.spotify_auth_error}")
-                st.session_state.spotify_auth_error = ""
-            st.markdown("Connect your Spotify account to create this playlist directly.")
-            st.markdown("")
-            profile = st.session_state.get("project","user")
-            from spotify_push import make_oauth, get_auth_url
-            oauth = make_oauth(client_id, client_secret, redirect_uri)
-            url   = get_auth_url(oauth, state=profile)
-            st.markdown(
-                f'<a href="{url}" target="_self" style="display:inline-block;'
-                'padding:0.55rem 1.4rem;background:#1DB954;color:#000;font-weight:700;'
-                'border-radius:6px;text-decoration:none;font-size:0.95rem;">'
-                'Connect to Spotify →</a>',
-                unsafe_allow_html=True,
-            )
-            st.caption("Clicking Connect will briefly redirect you to Spotify's login page. "
-                       "Your recommendations are saved and will be ready when you return.")
-            with st.expander("🔍 Debug: OAuth URL (temporary)"):
-                st.caption(f"**Redirect URI in use:** `{redirect_uri}`")
-                st.caption(f"**Full auth URL:** `{url}`")
-
-    with divider_col:
-        st.markdown("<div style='border-left:1px solid #333;min-height:640px;'></div>",
-                    unsafe_allow_html=True)
-
-    with right:
-        # ── Soundiiz logo header ──
-        _sz_logo = _logo_img(LOGO_SOUNDIIZ, "150px")
-        if _sz_logo:
-            st.markdown(_sz_logo, unsafe_allow_html=True)
-        else:
-            st.markdown("### Download for Soundiiz")
-
-        st.markdown(
-            "Not on Spotify? Download the CSV and import to your preferred service "
-            "via **[soundiiz.com](https://soundiiz.com)**."
+    if not spotify_configured:
+        st.info(
+            "**Spotify not configured.**\n\n"
+            "Add to `.streamlit/secrets.toml`:\n\n"
+            "```toml\n"
+            "SPOTIFY_CLIENT_ID     = \"your_client_id\"\n"
+            "SPOTIFY_CLIENT_SECRET = \"your_client_secret\"\n"
+            "SPOTIFY_REDIRECT_URI  = \"https://music-discovery-agent.streamlit.app/\"\n"
+            "```\n\n"
+            "Register both redirect URIs at "
+            "[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)."
         )
-
-        fname = _default_output()
-        st.download_button("⬇  Download Soundiiz CSV",
-                           data=_recs_to_soundiiz_csv(recs),
-                           file_name=fname, mime="text/csv",
-                           use_container_width=True, type="primary")
-        st.download_button("⬇  Download full detail CSV",
-                           data=_recs_to_detail_csv(recs),
-                           file_name=fname.replace(".csv","_detail.csv"),
-                           mime="text/csv", use_container_width=True)
+    elif st.session_state.get("spotify_push_result"):
+        pr = st.session_state.spotify_push_result
+        st.success(f"**Playlist created** — {len(pr['found'])} of {len(recs)} tracks added")
+        st.markdown(f"### [Open \"{pr['playlist_name']}\" in Spotify]({pr['playlist_url']})")
+        if pr["not_found"]:
+            st.markdown(f"**{len(pr['not_found'])} tracks not found on Spotify:**")
+            for t in pr["not_found"]:
+                st.markdown(f"&nbsp;&nbsp;&nbsp;• {t}", unsafe_allow_html=True)
         st.markdown("")
-
-        # ── Supported services ──
-        st.markdown("#### Imports to:")
-        _amz_logo = _logo_img(LOGO_AMAZON, "130px")
-        _apl_logo = _logo_img(LOGO_APPLE, "130px")
-        if _amz_logo or _apl_logo:
-            logo_row = "".join([
-                f'<div style="flex:1;text-align:center;">{_amz_logo}</div>' if _amz_logo else "",
-                f'<div style="flex:1;text-align:center;">{_apl_logo}</div>' if _apl_logo else "",
-            ])
-            st.markdown(
-                f'<div style="display:flex;gap:1rem;align-items:center;'
-                f'margin:0.6rem 0 1rem 0;">{logo_row}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption("Amazon Music · Apple Music · Tidal · YouTube Music")
-
-        st.markdown("#### How to import")
-        st.markdown("""
-1. **Download** the Soundiiz CSV above
-2. Go to **[soundiiz.com](https://soundiiz.com)** and sign in
-3. Click **Transfer → Import from file**, choose **CSV**
-4. Select your destination platform and click **Transfer**
-
-*Free tier: up to 200 tracks per playlist.*
-""")
+        if st.button("Push another playlist", use_container_width=True):
+            st.session_state.spotify_push_result = None
+            st.session_state.spotify_token       = None
+            st.session_state.spotify_user        = None
+            st.rerun()
+    elif st.session_state.get("spotify_token"):
+        user    = st.session_state.spotify_user or {}
+        display = user.get("display_name") or user.get("id") or "Spotify User"
+        st.success(f"✓ Connected as **{display}**")
+        st.markdown("")
+        default_name = f"Music Discovery — {temperature} — {date.today().strftime('%b %Y')}"
+        playlist_name = st.text_input("Playlist name", value=default_name, max_chars=100)
+        playlist_desc = st.text_input(
+            "Description *(optional)*",
+            value=f"Generated by Music Discovery Agent · {temperature} · {len(recs)} tracks",
+            max_chars=300,
+        )
+        public = st.checkbox("Make playlist public", value=True)
+        st.markdown("")
+        if st.button(f"Create playlist with {len(recs)} tracks →", type="primary",
+                     use_container_width=True, disabled=not playlist_name.strip()):
+            token_info = st.session_state.spotify_token
+            user_id    = (st.session_state.spotify_user or {}).get("id","")
+            prog       = st.progress(0)
+            status_msg = st.empty()
+            def _on_progress(i, total):
+                prog.progress(i/total)
+                status_msg.caption(f"Searching Spotify: {i} / {total} tracks…")
+            try:
+                from spotify_push import make_client, push_playlist
+                sp = make_client(token_info["access_token"])
+                push_result = push_playlist(
+                    sp=sp, user_id=user_id,
+                    name=playlist_name.strip(), description=playlist_desc.strip(),
+                    recs=recs, public=public, progress_callback=_on_progress,
+                )
+                prog.empty(); status_msg.empty()
+                st.session_state.spotify_push_result = push_result
+                st.rerun()
+            except Exception as e:
+                prog.empty(); status_msg.empty()
+                st.error(f"**Spotify error:** {e}")
+    else:
+        if st.session_state.get("spotify_auth_error"):
+            st.error(f"**Connection failed:** {st.session_state.spotify_auth_error}")
+            st.session_state.spotify_auth_error = ""
+        st.markdown("Connect your Spotify account to create this playlist directly.")
+        st.markdown("")
+        profile = st.session_state.get("project","user")
+        from spotify_push import make_oauth, get_auth_url
+        oauth = make_oauth(client_id, client_secret, redirect_uri)
+        url   = get_auth_url(oauth, state=profile)
+        st.markdown(
+            f'<a href="{url}" target="_self" style="display:inline-block;'
+            'padding:0.55rem 1.4rem;background:#1DB954;color:#000;font-weight:700;'
+            'border-radius:6px;text-decoration:none;font-size:0.95rem;">'
+            'Connect to Spotify →</a>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Clicking Connect will briefly redirect you to Spotify's login page. "
+                   "Your recommendations are saved and will be ready when you return.")
+        with st.expander("🔍 Debug: OAuth details"):
+            st.caption(f"**Redirect URI in use:** `{redirect_uri}`")
+            st.caption(f"**Full auth URL:**")
+            st.code(url, language=None)
 
     st.markdown("")
     if st.button("← Back to results"):

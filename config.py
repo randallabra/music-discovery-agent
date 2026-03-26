@@ -49,6 +49,7 @@ class RunConfig:
 
     # Lane modifier
     vibe_focus: str = ""
+    decade: str = "Any"
 
     # Purge thresholds
     max_artist_plays: int = 200

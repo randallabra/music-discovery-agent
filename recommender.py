@@ -225,8 +225,17 @@ def build_user_message(
     else:
         vibe_line = ""
 
+    decade_constraint = ""
+    if config.decade and config.decade != "Any":
+        decade_constraint = (
+            f"\nDECADE_FILTER: {config.decade}"
+            f"\n  → Only recommend tracks originally released in the {config.decade}."
+            f"\n  → Verify release year before including any candidate — do NOT include"
+            f"\n    tracks released outside this decade, even if they are stylistically adjacent."
+        )
+
     return f"""## Run Configuration
-MUSICAL_LANE: {config.lane}{vibe_line}
+MUSICAL_LANE: {config.lane}{vibe_line}{decade_constraint}
 BATCH_SIZE: {config.batch_size}
 MAX_ARTIST_PLAYS (purge threshold used): {config.max_artist_plays}
 MAX_UNIQUE_TRACKS (purge threshold used): {config.max_unique_tracks}
