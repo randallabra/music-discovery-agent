@@ -440,6 +440,18 @@ def step_overview():
       <b>Decade</b> to shape the anchor pool. Review and prune the pool, then let the
       engine build your playlist.</p>
 
+      <h4>How songs are understood</h4>
+      <p>Temperature classification is grounded in acoustic measurements drawn from
+      <b>AcousticBrainz</b> and the <b>Million Song Dataset</b> — two large-scale
+      research databases that encode the sonic properties of millions of songs: energy
+      level, brightness, rhythmic intensity, and the qualities that make a track feel
+      quiet, aggressive, electronic, or euphoric.</p>
+      <p>Where direct measurements aren't available for a song, the system fills the
+      gap by looking at its <b>related songs</b> — tracks with known acoustic profiles
+      that sit close to it in the similarity graph. Their measured qualities inform a
+      <b>similarity score</b> for the unmeasured track, extending confident temperature
+      classification to songs that no database has explicitly tagged.</p>
+
       <h4>Decision Science</h4>
       <div class="score"><span class="badge">TGE 45%</span>
         <p><b>Taste Graph Expansion</b> — Song-to-song co-listening neighborhoods
