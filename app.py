@@ -1369,7 +1369,7 @@ def step_export():
         oauth = make_oauth(client_id, client_secret, redirect_uri)
         url   = get_auth_url(oauth, state=profile)
         st.markdown(
-            f'<a href="{url}" target="_self" style="display:inline-block;'
+            f'<a href="{url}" target="_top" style="display:inline-block;'
             'padding:0.55rem 1.4rem;background:#1DB954;color:#000;font-weight:700;'
             'border-radius:6px;text-decoration:none;font-size:0.95rem;">'
             'Connect to Spotify →</a>',
