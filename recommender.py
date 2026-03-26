@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 import io
 import re
 from dataclasses import dataclass
@@ -442,8 +443,12 @@ def get_recommendations(
     state: ProjectState,
     client: Optional[anthropic.Anthropic] = None,
 ) -> RecommendationResult:
-    print(f"Calling Claude ({config.model}) for lane: {config.lane}...")
-    raw_text, tokens = call_claude(config, anchor_pool, state, client)
+    # Overshoot: ask Claude for more tracks than needed so filtering leaves enough
+    overshoot = int(config.batch_size * 1.6)
+    overshoot_config = dataclasses.replace(config, batch_size=overshoot)
+
+    print(f"Calling Claude ({config.model}) for lane: {config.lane} (requesting {overshoot} for overshoot)...")
+    raw_text, tokens = call_claude(overshoot_config, anchor_pool, state, client)
 
     recs = parse_response(raw_text)
     recs = filter_against_state(
@@ -452,7 +457,33 @@ def get_recommendations(
         known_titles=anchor_pool.known_titles or frozenset(),
     )
 
-    print(f"  {len(recs)} recommendations parsed | {tokens:,} tokens used")
+    # Per-artist cap of 2: keep the highest-DCS two per artist (recs are already sorted desc by DCS)
+    artist_count: dict[str, int] = {}
+    capped: list[Recommendation] = []
+    for r in recs:
+        key = r.artist.strip().lower()
+        if artist_count.get(key, 0) < 2:
+            capped.append(r)
+            artist_count[key] = artist_count.get(key, 0) + 1
+    recs = capped
+
+    # Artist spacing: first-occurrence recs first, then second-occurrence recs at the end
+    seen_artists: set[str] = set()
+    first_group: list[Recommendation] = []
+    second_group: list[Recommendation] = []
+    for r in recs:
+        key = r.artist.strip().lower()
+        if key not in seen_artists:
+            seen_artists.add(key)
+            first_group.append(r)
+        else:
+            second_group.append(r)
+    recs = first_group + second_group
+
+    # Trim to original batch_size (may be less if pool is small — that's fine)
+    recs = recs[:config.batch_size]
+
+    print(f"  {len(recs)} recommendations after filtering/spacing | {tokens:,} tokens used")
     return RecommendationResult(
         recommendations=recs,
         raw_response=raw_text,

@@ -20,6 +20,7 @@ class ProjectState:
     run_count: int = 0
     last_lane: Optional[str] = None
     anchor_pool_history: list = field(default_factory=list)
+    ignore_collision_memory: bool = False
     # list of lists: each entry is the set of (lower) artist names used in one anchor pool,
     # most recent last. Capped at _FRESHNESS_LOOKBACK entries.
 
@@ -41,6 +42,8 @@ class ProjectState:
     # --- Collision memory ---
 
     def in_collision_memory(self, artist: str, track: str) -> bool:
+        if self.ignore_collision_memory:
+            return False
         key = (self._norm(artist), self._norm(track))
         return key in self._collision_set()
 
@@ -92,6 +95,7 @@ class ProjectState:
             "run_count": self.run_count,
             "last_lane": self.last_lane,
             "anchor_pool_history": self.anchor_pool_history,
+            "ignore_collision_memory": self.ignore_collision_memory,
         }
 
     @classmethod
@@ -102,6 +106,7 @@ class ProjectState:
             run_count=d.get("run_count", 0),
             last_lane=d.get("last_lane"),
             anchor_pool_history=d.get("anchor_pool_history", []),
+            ignore_collision_memory=d.get("ignore_collision_memory", False),
         )
 
 

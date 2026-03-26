@@ -123,8 +123,8 @@ def _init():
         },
         # New discovery selectors
         "temperature":       "Any",
-        "genre":             "Any",
-        "decade":            "Any",
+        "genre":             [],
+        "decade":            [],
         # Anchor pool
         "anchor_pool_tracks": None,  # list of dicts after user edits
         "anchor_pool_raw":    None,  # unfiltered list before user checkbox edits
@@ -163,15 +163,15 @@ def _load_index(profile: str) -> dict:
 def _filter_index(
     index: dict,
     temperature: str,
-    genre: str,
-    decade: str,
+    genres: list[str],
+    decades: list[str],
     blacklist: set,
     min_plays: int,
 ) -> list[dict]:
     """Return tracks matching all active filters, sorted by play count desc."""
     pocket_filter = TEMPERATURE_POCKET_MAP.get(temperature)
-    genre_filter  = genre.lower() if genre != "Any" else None
-    decade_filter = decade if decade != "Any" else None
+    genre_lower_set = {g.lower() for g in genres} if genres else None
+    decade_set = set(decades) if decades else None
 
     results = []
     for key, t in index.items():
@@ -187,9 +187,9 @@ def _filter_index(
             continue
         if pocket_filter and t.get("pocket") != pocket_filter:
             continue
-        if genre_filter and t.get("genre","").lower() != genre_filter:
+        if genre_lower_set and t.get("genre","").lower() not in genre_lower_set:
             continue
-        if decade_filter and t.get("decade") != decade_filter:
+        if decade_set and t.get("decade") not in decade_set:
             continue
         results.append({
             "key":    key,
@@ -295,7 +295,9 @@ def _state_file(project: str) -> Path:
 def _default_output() -> str:
     p   = st.session_state.get("project", "user")
     tmp = st.session_state.get("temperature", "").replace(" / "," ").replace(" ","_").lower() or "discovery"
-    g   = st.session_state.get("genre","").replace(" ","_").lower() or "any"
+    _g  = st.session_state.get("genre", [])
+    _g_str = "_".join(_g) if isinstance(_g, list) and _g else (_g if isinstance(_g, str) else "")
+    g   = _g_str.replace(" ","_").lower() or "any"
     run = 1
     state = st.session_state.get("state_obj")
     if state:
@@ -603,6 +605,17 @@ def step_history():
         if spotify_file:
             st.success(f"✓  {spotify_file.name}  ({spotify_file.size:,} bytes)")
 
+    st.markdown("---")
+    st.markdown("#### Or fetch directly from Last.fm")
+    st.caption(
+        "No CSV needed — enter your Last.fm username and we'll pull your full listening history directly via the Last.fm API. "
+        "Requires a Last.fm API key (free at last.fm/api).\n\n"
+        "**Direct Last.fm API import coming soon** ℹ️\n\n"
+        "In the meantime, you can get your data instantly:\n"
+        "- **Last.fm:** Export your full history in seconds at [lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/) — no waiting\n"
+        "- **Spotify:** Data request takes up to 30 days from [spotify.com/account/privacy](https://www.spotify.com/us/account/privacy/)"
+    )
+
     uploaded = None; source = None
     if lastfm_file and spotify_file:
         st.warning("Please upload from one service at a time.")
@@ -656,13 +669,52 @@ def step_profile():
             if idx:
                 if sf.exists():
                     s = load_state(sf)
-                    st.info(
-                        f"**{project}** — indexed\n\n"
-                        f"- Tracks in index: **{len(idx):,}**\n"
-                        f"- Previous runs: **{s.run_count}**\n"
-                        f"- Collision memory: **{len(s.collision_memory)}** tracks\n"
-                        f"- Blacklisted artists: **{len(s.blacklist)}**"
-                    )
+
+                    # Count unique tracks from uploaded CSV
+                    csv_path = st.session_state.get("tmp_csv_path")
+                    unique_track_count = None
+                    if csv_path:
+                        try:
+                            import csv as _csv
+                            tracks_seen = set()
+                            with open(csv_path, encoding="utf-8", errors="replace") as f:
+                                reader = _csv.DictReader(f)
+                                for row in reader:
+                                    artist = (row.get("artist") or row.get("Artist") or "").strip().lower()
+                                    track = (row.get("track") or row.get("Track") or row.get("track_name") or "").strip().lower()
+                                    if artist and track:
+                                        tracks_seen.add((artist, track))
+                            unique_track_count = len(tracks_seen)
+                        except Exception:
+                            pass
+
+                    lines = [f"**{project}** — indexed"]
+                    if unique_track_count is not None:
+                        lines.append(f"- Total unique tracks in your upload: **{unique_track_count:,}**")
+                    lines.append(f"- Tracks in index (taste signals): **{len(idx):,}**")
+                    lines.append(f"- Previous runs: **{s.run_count}**")
+                    lines.append(f"- Tracks withheld from anchor pool (prior runs): **{len(s.collision_memory)}**")
+                    lines.append(f"- Blacklisted artists: **{len(s.blacklist)}**")
+                    st.info("\n\n".join(lines))
+
+                    if s.run_count > 0:
+                        st.markdown("")
+                        collision_choice = st.radio(
+                            "Prior run history",
+                            options=[
+                                "Withhold previously recommended tracks from future anchor pools and recommendations",
+                                "Do not withhold previously selected tracks from anchor pools and recommendations moving forwards",
+                            ],
+                            index=0 if not s.ignore_collision_memory else 1,
+                            key="collision_memory_choice",
+                            label_visibility="collapsed",
+                        )
+                        if collision_choice.startswith("Do not withhold"):
+                            s.ignore_collision_memory = True
+                            st.session_state.state_obj = s
+                        else:
+                            s.ignore_collision_memory = False
+                            st.session_state.state_obj = s
                 else:
                     st.info(f"**{project}** — {len(idx):,} indexed tracks. No run history yet.")
             else:
@@ -687,7 +739,7 @@ def step_parameters():
     left, right = st.columns(2, gap="large")
 
     with left:
-        st.markdown("**Anchor pool**")
+        st.markdown("**Anchor pool:** *the seed data from your listening history which will inform song recommendations*")
         anchor_size = st.number_input(
             "Tracks in your anchor pool",
             min_value=5, max_value=100, step=5,
@@ -733,9 +785,11 @@ def step_parameters():
 def step_blacklist():
     st.subheader("Step 5 — Blacklist")
     st.caption(
-        "Artists listed here will be excluded from your anchor pool "
-        "and will never appear in recommendations. "
-        "Enter one artist per line — or comma-separated."
+        "Artists listed here will be excluded from your anchor pool and will never appear in recommendations. "
+        "Include either artists you know inside out, or artists that fit your tastes but you know you don't like. "
+        "Enter one artist per line — or comma-separated.\n\n"
+        "This blacklist will live locally on your hard drive to inform all future sessions and playlist creations. "
+        "You can expand it over time."
     )
     state: ProjectState = st.session_state.state_obj or ProjectState()
     left, right = st.columns(2, gap="large")
@@ -777,7 +831,8 @@ def step_discovery():
     st.subheader("Step 6 — Temperature")
     st.caption(
         "Set the emotional temperature, genre, and era for this run. "
-        "These filters shape your anchor pool — the taste signals the engine builds from."
+        "These filters will shape your anchor pool — the taste signals the engine builds from, "
+        "and through that, the songs that are recommended back to you."
     )
 
     left, right = st.columns([1.1, 1], gap="large")
@@ -796,25 +851,23 @@ def step_discovery():
 
         st.markdown("")
         st.markdown("#### Genre")
-        st.caption("Top 15 genres by catalog size. 'Any' draws across all genres.")
-        genre = st.radio(
+        st.caption("Top 15 genres by catalog size. Leave blank to draw across all genres.")
+        genre_selection = st.multiselect(
             "Genre",
-            options=GENRE_OPTIONS,
-            index=GENRE_OPTIONS.index(st.session_state.genre)
-                  if st.session_state.genre in GENRE_OPTIONS else 0,
-            horizontal=True,
+            options=GENRE_OPTIONS[1:],  # exclude "Any"
+            default=st.session_state.genre if isinstance(st.session_state.genre, list) else [],
             label_visibility="collapsed",
+            placeholder="Any genre (leave blank for all)",
         )
 
         st.markdown("")
         st.markdown("#### Decade  *(~90% of catalog has year data)*")
-        decade = st.radio(
+        decade_selection = st.multiselect(
             "Decade",
-            options=DECADE_OPTIONS,
-            index=DECADE_OPTIONS.index(st.session_state.decade)
-                  if st.session_state.decade in DECADE_OPTIONS else 0,
-            horizontal=True,
+            options=DECADE_OPTIONS[1:],  # exclude "Any"
+            default=st.session_state.decade if isinstance(st.session_state.decade, list) else [],
             label_visibility="collapsed",
+            placeholder="Any decade (leave blank for all)",
         )
 
     with right:
@@ -835,17 +888,18 @@ def step_discovery():
             state = st.session_state.state_obj or ProjectState()
             p = st.session_state.params
             preview = _filter_index(
-                index, temperature, genre, decade,
+                index, temperature, genre_selection, decade_selection,
                 blacklist=set(state.blacklist),
                 min_plays=p["min_track_plays"],
             )
             st.markdown("")
+            total_in_index = len(index)
             if len(preview) >= p["anchor_pool_size"]:
-                st.success(f"**{len(preview):,}** tracks match — {p['anchor_pool_size']} will be sampled for the anchor pool.")
+                st.success(f"**{len(preview):,}** of {total_in_index:,} tracks match — {p['anchor_pool_size']} will be sampled for the anchor pool.")
             elif len(preview) > 0:
-                st.warning(f"**{len(preview)}** tracks match — smaller than your anchor pool size of {p['anchor_pool_size']}. All will be used.")
+                st.warning(f"**{len(preview)}** of {total_in_index:,} tracks match — smaller than your anchor pool size of {p['anchor_pool_size']}. All will be used.")
             else:
-                st.error("No tracks match this combination. Try broadening the filters.")
+                st.error(f"No tracks match this combination (out of {total_in_index:,}). Try broadening the filters.")
 
     col_back, col_next = st.columns(2)
     with col_back:
@@ -854,13 +908,13 @@ def step_discovery():
     with col_next:
         filters_changed = (
             temperature != st.session_state.temperature or
-            genre       != st.session_state.genre       or
-            decade      != st.session_state.decade
+            genre_selection != st.session_state.genre or
+            decade_selection != st.session_state.decade
         )
         if st.button("Next →  (build anchor pool)", type="primary"):
             st.session_state.temperature = temperature
-            st.session_state.genre       = genre
-            st.session_state.decade      = decade
+            st.session_state.genre       = genre_selection
+            st.session_state.decade      = decade_selection
             if filters_changed:
                 st.session_state.anchor_pool_raw    = None
                 st.session_state.anchor_pool_tracks = None
@@ -876,9 +930,11 @@ def step_anchor_pool():
     genre       = st.session_state.genre
     decade      = st.session_state.decade
 
-    filter_parts = [f"Temperature: **{temperature}**", f"Genre: **{genre}**"]
-    if decade != "Any":
-        filter_parts.append(f"Decade: **{decade}**")
+    genre_display = ", ".join(genre) if isinstance(genre, list) and genre else "Any"
+    decade_display = ", ".join(decade) if isinstance(decade, list) and decade else "Any"
+    filter_parts = [f"Temperature: **{temperature}**", f"Genre: **{genre_display}**"]
+    if (isinstance(decade, list) and decade) or (isinstance(decade, str) and decade != "Any"):
+        filter_parts.append(f"Decade: **{decade_display}**")
     st.caption(
         "  ·  ".join(filter_parts) + "\n\n"
         "These tracks are your strongest taste signals. They drive adjacency scoring — "
@@ -986,6 +1042,11 @@ def step_run():
     state  = st.session_state.state_obj or ProjectState()
     pool   = st.session_state.anchor_pool_tracks or []
 
+    _genre_val = st.session_state.get("genre", [])
+    _genre_display = ", ".join(_genre_val) if isinstance(_genre_val, list) and _genre_val else (_genre_val if isinstance(_genre_val, str) and _genre_val != "Any" else "Any")
+    _decade_val = st.session_state.get("decade", [])
+    _decade_display = ", ".join(_decade_val) if isinstance(_decade_val, list) and _decade_val else (_decade_val if isinstance(_decade_val, str) and _decade_val != "Any" else "Any")
+
     left, right = st.columns(2, gap="large")
     with left:
         st.markdown("**Run configuration**")
@@ -994,8 +1055,8 @@ def step_run():
 |---|---|
 | Profile | `{st.session_state.project}` |
 | Temperature | {st.session_state.temperature} |
-| Genre | {st.session_state.genre} |
-| Decade | {st.session_state.decade} |
+| Genre | {_genre_display} |
+| Decade | {_decade_display} |
 | Anchor pool | {len(pool)} tracks |
 | Batch size | {p['batch_size']} songs |
 """)
@@ -1033,8 +1094,11 @@ def step_run():
 
 
 def _execute_run(pool, state, p, api_key):
-    temperature = st.session_state.temperature
-    genre       = st.session_state.genre
+    temperature = st.session_state.get("temperature", "Any")
+    genre_val = st.session_state.get("genre", [])
+    genre_str = ", ".join(genre_val) if isinstance(genre_val, list) and genre_val else (genre_val if isinstance(genre_val, str) and genre_val != "Any" else "Any")
+    decade_val = st.session_state.get("decade", [])
+    decade_str = ", ".join(decade_val) if isinstance(decade_val, list) and decade_val else (decade_val if isinstance(decade_val, str) and decade_val != "Any" else "Any")
 
     # Require the uploaded CSV — it's the source of candidate scoring data
     csv_path_str = st.session_state.get("tmp_csv_path")
@@ -1053,7 +1117,7 @@ def _execute_run(pool, state, p, api_key):
     source   = st.session_state.get("source") or "lastfm"
 
     # Build a lane string for the existing recommender interface
-    lane_str = f"{temperature}" + (f" · {genre}" if genre != "Any" else "")
+    lane_str = f"{temperature} / {genre_str} / {decade_str}"
 
     # Parse the full CSV to get known_tracks, known_tracks_by_plays, known_titles.
     # These drive the "do not recommend already-heard tracks" safety filters.
@@ -1109,7 +1173,7 @@ def _execute_run(pool, state, p, api_key):
         lane=lane_str,
         project=st.session_state.project,
         vibe_focus="",
-        decade=st.session_state.get("decade", "Any"),
+        decade=decade_str,
         max_artist_plays=p["max_artist_plays"],
         max_unique_tracks=p["max_unique_tracks"],
         anchor_pool_size=len(pool),
@@ -1419,10 +1483,14 @@ def _sidebar():
             st.markdown(f"**Profile:** `{st.session_state.project}`")
         if st.session_state.temperature and st.session_state.temperature != "Any":
             st.markdown(f"**Temperature:** {st.session_state.temperature}")
-        if st.session_state.genre and st.session_state.genre != "Any":
-            st.markdown(f"**Genre:** {st.session_state.genre}")
-        if st.session_state.decade and st.session_state.decade != "Any":
-            st.markdown(f"**Decade:** {st.session_state.decade}")
+        _sb_genre = st.session_state.genre
+        _sb_genre_str = ", ".join(_sb_genre) if isinstance(_sb_genre, list) else _sb_genre
+        if _sb_genre_str and _sb_genre_str != "Any":
+            st.markdown(f"**Genre:** {_sb_genre_str}")
+        _sb_decade = st.session_state.decade
+        _sb_decade_str = ", ".join(_sb_decade) if isinstance(_sb_decade, list) else _sb_decade
+        if _sb_decade_str and _sb_decade_str != "Any":
+            st.markdown(f"**Decade:** {_sb_decade_str}")
         pool = st.session_state.anchor_pool_tracks
         if pool:
             st.markdown(f"**Anchor pool:** {len(pool)} tracks")
