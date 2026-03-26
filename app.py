@@ -231,19 +231,32 @@ def _spotify_secrets() -> tuple[str, str, str]:
 def _handle_spotify_callback():
     code    = st.query_params.get("code")
     profile = st.query_params.get("state", "")
+    error   = st.query_params.get("error", "")
+
+    # Spotify returned an explicit error (e.g. user denied access)
+    if error and not code:
+        st.session_state.spotify_auth_error = f"Spotify returned: {error}"
+        st.query_params.clear()
+        st.session_state.step = 9
+        st.rerun()
+
     if not code:
         return
     if st.session_state.get("spotify_token"):
         st.query_params.clear()
-        return
+        st.rerun()
     client_id, client_secret, redirect_uri = _spotify_secrets()
     if not client_id or not client_secret:
+        st.session_state.spotify_auth_error = "Spotify credentials missing from app secrets."
         st.query_params.clear()
-        return
+        st.session_state.step = 9
+        st.rerun()
     try:
         from spotify_push import make_oauth, exchange_code as _exc, make_client, get_current_user
         oauth      = make_oauth(client_id, client_secret, redirect_uri)
         token_info = _exc(oauth, code)
+        if not token_info or "access_token" not in token_info:
+            raise ValueError(f"Token exchange returned no access_token. Response: {token_info}")
         sp         = make_client(token_info["access_token"])
         user       = get_current_user(sp)
         st.session_state.spotify_token = token_info
@@ -251,7 +264,8 @@ def _handle_spotify_callback():
     except Exception as e:
         st.session_state.spotify_auth_error = str(e)
         st.query_params.clear()
-        return
+        st.session_state.step = 9   # land on Export so the error is visible
+        st.rerun()
     if profile:
         st.session_state.project = profile
         sf = _state_dir() / f"{profile}.json"
@@ -262,6 +276,7 @@ def _handle_spotify_callback():
             st.session_state.result = last
     st.query_params.clear()
     st.session_state.step = 9
+    st.rerun()   # clean rerun — lands on Export with token already in session state
 
 # ─────────────────────────────────────────────────────────────
 #  Helpers
@@ -1249,6 +1264,20 @@ def step_export():
     from datetime import date
 
     st.subheader("Step 9 — Export Your Playlist")
+
+    # Surface any Spotify auth error immediately — shown before any other content
+    # so it's visible even if result is None after the OAuth redirect.
+    _auth_err = st.session_state.get("spotify_auth_error", "")
+    if _auth_err:
+        st.error(
+            f"**Spotify connection failed.** Here's the exact error so we can diagnose it:\n\n"
+            f"```\n{_auth_err}\n```\n\n"
+            "Common causes: Spotify rejected the authorization code (try connecting again), "
+            "or your app may require updated permissions per Spotify's 2026 platform changes. "
+            "Copy the error above and share it."
+        )
+        st.session_state.spotify_auth_error = ""   # clear after display
+
     result = st.session_state.result
     if not result:
         st.warning("No recommendations found. Please run the generator first.")
@@ -1332,9 +1361,7 @@ def step_export():
                 prog.empty(); status_msg.empty()
                 st.error(f"**Spotify error:** {e}")
     else:
-        if st.session_state.get("spotify_auth_error"):
-            st.error(f"**Connection failed:** {st.session_state.spotify_auth_error}")
-            st.session_state.spotify_auth_error = ""
+        # (auth errors are surfaced at the top of this function, not here)
         st.markdown("Connect your Spotify account to create this playlist directly.")
         st.markdown("")
         profile = st.session_state.get("project","user")
