@@ -874,24 +874,26 @@ def step_discovery():
 
         st.markdown("")
         st.markdown("#### Genre")
-        st.caption("Top 15 genres by catalog size. Leave blank to draw across all genres.")
-        genre_selection = st.multiselect(
-            "Genre",
-            options=GENRE_OPTIONS[1:],  # exclude "Any"
-            default=st.session_state.genre if isinstance(st.session_state.genre, list) else [],
-            label_visibility="collapsed",
-            placeholder="Any genre (leave blank for all)",
-        )
+        st.caption("Top 15 genres by catalog size. Check one or more — or leave all unchecked for any.")
+        _saved_genres = st.session_state.genre if isinstance(st.session_state.genre, list) else []
+        _genre_opts = GENRE_OPTIONS[1:]   # exclude "Any"
+        # Lay out checkboxes in 3 columns
+        _gcols = st.columns(3)
+        genre_selection = [
+            g for i, g in enumerate(_genre_opts)
+            if _gcols[i % 3].checkbox(g, value=(g in _saved_genres), key=f"genre_cb_{g}")
+        ]
 
         st.markdown("")
         st.markdown("#### Decade  *(~90% of catalog has year data)*")
-        decade_selection = st.multiselect(
-            "Decade",
-            options=DECADE_OPTIONS[1:],  # exclude "Any"
-            default=st.session_state.decade if isinstance(st.session_state.decade, list) else [],
-            label_visibility="collapsed",
-            placeholder="Any decade (leave blank for all)",
-        )
+        st.caption("Check one or more — or leave all unchecked for any decade.")
+        _saved_decades = st.session_state.decade if isinstance(st.session_state.decade, list) else []
+        _decade_opts = DECADE_OPTIONS[1:]  # exclude "Any"
+        _dcols = st.columns(4)
+        decade_selection = [
+            d for i, d in enumerate(_decade_opts)
+            if _dcols[i % 4].checkbox(d, value=(d in _saved_decades), key=f"decade_cb_{d}")
+        ]
 
     with right:
         st.markdown("#### Temperature guide")
