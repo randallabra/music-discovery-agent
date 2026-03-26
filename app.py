@@ -1247,6 +1247,10 @@ def _execute_run(pool, state, p, api_key):
         _save_last_result(st.session_state.project, result, temperature)
     except Exception:
         pass
+    # Clear any leftover checkbox state so every new result starts fully checked
+    for _k in list(st.session_state.keys()):
+        if _k.startswith("track_sel_"):
+            del st.session_state[_k]
     st.rerun()
 
 
@@ -1267,13 +1271,10 @@ def _show_results(result: RecommendationResult):
             f"to reach your requested batch of {batch_size} — shown with a ↓ marker below."
         )
 
-    result_id = id(result)
-    if st.session_state.get("_result_id") != result_id:
-        st.session_state["_result_id"] = result_id
-        for i in range(len(recs)):
-            st.session_state[f"track_sel_{i}"] = True
-
-    st.markdown("**Select tracks to include in your playlist** — all selected by default:")
+    # Ensure every track starts checked — value=True is the fallback when a key
+    # is absent; _execute_run clears these keys before each new run so returning
+    # users always see a fresh, fully-checked list.
+    st.markdown("**Select tracks to include in your playlist** — uncheck any you'd like to remove:")
     st.markdown(
         "<small style='color:#888'>DCS = Discovery Confidence Score &nbsp;|&nbsp; "
         "↓ = backfilled to meet batch size</small>",
@@ -1291,7 +1292,7 @@ def _show_results(result: RecommendationResult):
     for i, r in enumerate(recs):
         c0, c1, c2, c3, c4 = st.columns([0.35, 1.8, 2.2, 0.55, 5])
         with c0:
-            st.checkbox("", key=f"track_sel_{i}", label_visibility="collapsed")
+            st.checkbox("", value=True, key=f"track_sel_{i}", label_visibility="collapsed")
         artist_label = f"<small>{r.artist}</small>"
         track_label  = (
             f"<small style='color:#aaa'>{r.track} ↓</small>"
