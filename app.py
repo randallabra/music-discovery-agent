@@ -137,6 +137,7 @@ def _init():
         "spotify_auth_error":  "",
         # UI flags
         "show_product_design": False,
+        "demo_mode":           False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -201,18 +202,8 @@ def _filter_index(
             "decade": t.get("decade","—"),
         })
 
-    sorted_results = sorted(results, key=lambda x: -x["plays"])
-
-    # Cap at 2 tracks per artist (highest-played first)
-    artist_counts: dict[str, int] = {}
-    capped = []
-    for t in sorted_results:
-        a = t["artist"]
-        if artist_counts.get(a, 0) < 2:
-            capped.append(t)
-            artist_counts[a] = artist_counts.get(a, 0) + 1
-
-    return capped
+    # Return full filtered list sorted by plays — caller applies any artist cap
+    return sorted(results, key=lambda x: -x["plays"])
 
 # ─────────────────────────────────────────────────────────────
 #  Spotify helpers (unchanged from v1)
@@ -606,35 +597,67 @@ def step_history():
             st.success(f"✓  {spotify_file.name}  ({spotify_file.size:,} bytes)")
 
     st.markdown("---")
+
+    # ── Demo mode ────────────────────────────────────────────────
+    data_mode = st.radio(
+        "Data source",
+        options=[
+            "I'll upload my own listening history",
+            "I don't have my data yet — let's work off the existing track_universe.db",
+        ],
+        index=1 if st.session_state.demo_mode else 0,
+        label_visibility="collapsed",
+        key="data_mode_radio",
+    )
+    demo_chosen = data_mode.startswith("I don't have")
+
+    if demo_chosen:
+        st.info(
+            "**Demo mode** — you'll be exploring the app using **marlonrando**'s "
+            "pre-indexed listening history (12,899 tracks). "
+            "All filters, Temperature, Anchor Pool, and recommendation engine work exactly "
+            "as they would with your own data."
+        )
+
+    st.markdown("---")
     st.markdown("#### Or fetch directly from Last.fm")
     st.caption(
-        "No CSV needed — enter your Last.fm username and we'll pull your full listening history directly via the Last.fm API. "
-        "Requires a Last.fm API key (free at last.fm/api).\n\n"
-        "**Direct Last.fm API import coming soon** ℹ️\n\n"
-        "In the meantime, you can get your data instantly:\n"
-        "- **Last.fm:** Export your full history in seconds at [lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/) — no waiting\n"
-        "- **Spotify:** Data request takes up to 30 days from [spotify.com/account/privacy](https://www.spotify.com/us/account/privacy/)"
+        "**Direct Last.fm API import coming soon** — no CSV download needed.\n\n"
+        "In the meantime, export your full history instantly at "
+        "[lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/)."
     )
 
     uploaded = None; source = None
-    if lastfm_file and spotify_file:
-        st.warning("Please upload from one service at a time.")
-    elif lastfm_file:
-        uploaded, source = lastfm_file, "lastfm"
-    elif spotify_file:
-        uploaded, source = spotify_file, "spotify"
+    if not demo_chosen:
+        if lastfm_file and spotify_file:
+            st.warning("Please upload from one service at a time.")
+        elif lastfm_file:
+            uploaded, source = lastfm_file, "lastfm"
+        elif spotify_file:
+            uploaded, source = spotify_file, "spotify"
+
+    next_enabled = demo_chosen or (uploaded is not None)
 
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
             _go(1)
     with col_next:
-        if st.button("Next →", type="primary", disabled=(uploaded is None)):
+        if st.button("Next →", type="primary", disabled=not next_enabled):
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-            tmp.write(uploaded.read()); tmp.flush()
-            st.session_state.tmp_csv_path = tmp.name
-            st.session_state.csv_filename = uploaded.name
-            st.session_state.source = source
+            if demo_chosen:
+                st.session_state.demo_mode    = True
+                st.session_state.tmp_csv_path = None
+                st.session_state.csv_filename = "(demo — marlonrando)"
+                st.session_state.source       = "lastfm"
+                st.session_state.project      = "marlonrando"
+            else:
+                st.session_state.demo_mode    = False
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+                tmp.write(uploaded.read()); tmp.flush()
+                st.session_state.tmp_csv_path = tmp.name
+                st.session_state.csv_filename = uploaded.name
+                st.session_state.source       = source
             _go(3)
 
 # ─────────────────────────────────────────────────────────────
@@ -958,8 +981,15 @@ def step_anchor_pool():
             blacklist=set(state.blacklist),
             min_plays=p["min_track_plays"],
         )
-        # Cap at anchor_pool_size
-        raw = filtered[:p["anchor_pool_size"]]
+        # Per-artist cap of 2 (highest-played first), then slice to anchor_pool_size
+        _ac: dict[str, int] = {}
+        _capped = []
+        for _t in filtered:
+            _a = _t["artist"]
+            if _ac.get(_a, 0) < 2:
+                _capped.append(_t)
+                _ac[_a] = _ac.get(_a, 0) + 1
+        raw = _capped[:p["anchor_pool_size"]]
         st.session_state.anchor_pool_raw = raw
 
         # Initialise all checkboxes to True
@@ -1100,59 +1130,68 @@ def _execute_run(pool, state, p, api_key):
     decade_val = st.session_state.get("decade", [])
     decade_str = ", ".join(decade_val) if isinstance(decade_val, list) and decade_val else (decade_val if isinstance(decade_val, str) and decade_val != "Any" else "Any")
 
-    # Require the uploaded CSV — it's the source of candidate scoring data
+    # Build a lane string for the existing recommender interface
+    lane_str = f"{temperature} / {genre_str} / {decade_str}"
+
+    from history import AnchorPool as _AP, parse_history_csv
+
     csv_path_str = st.session_state.get("tmp_csv_path")
-    if not csv_path_str:
+    demo_mode    = st.session_state.get("demo_mode", False)
+
+    if csv_path_str:
+        # ── Normal path: parse uploaded CSV ──────────────────────
+        csv_path = Path(csv_path_str)
+        source   = st.session_state.get("source") or "lastfm"
+        try:
+            stats, total_scrobbles, _fmt = parse_history_csv(csv_path, source)
+        except Exception as e:
+            st.error(f"**Could not parse listening history CSV:** {e}")
+            return
+
+        known_tracks: frozenset = frozenset(
+            (artist.strip().lower(), track.strip().lower())
+            for artist, s in stats.items()
+            for track, _ in s.top_tracks
+        )
+        _all_ktp = sorted(
+            ((artist, track, plays)
+             for artist, s in stats.items()
+             for track, plays in s.top_tracks),
+            key=lambda x: -x[2],
+        )
+        known_tracks_by_plays = _all_ktp[:300]
+        _title_plays: dict[str, int] = {}
+        for artist, s in stats.items():
+            for track, plays in s.top_tracks:
+                _k = track.strip().lower()
+                _title_plays[_k] = _title_plays.get(_k, 0) + plays
+        known_titles: frozenset = frozenset(_title_plays.keys())
+        total_artists = len(stats)
+
+    elif demo_mode:
+        # ── Demo path: build known_* directly from the pre-indexed JSON ──
+        _idx = _load_index(st.session_state.project)
+        known_tracks = frozenset(
+            (t["artist"].strip().lower(), t["track"].strip().lower())
+            for t in _idx.values()
+        )
+        _sorted_idx = sorted(_idx.values(), key=lambda x: -x["plays"])
+        known_tracks_by_plays = [
+            (t["artist"], t["track"], t["plays"]) for t in _sorted_idx[:300]
+        ]
+        known_titles = frozenset(t["track"].strip().lower() for t in _idx.values())
+        total_scrobbles = sum(t["plays"] for t in _idx.values())
+        total_artists   = len({t["artist"] for t in _idx.values()})
+
+    else:
         st.error(
-            "**No listening history CSV found.** "
-            "Please go back to Step 2 and upload your Last.fm or Spotify CSV. "
-            "The CSV is needed to score recommendation candidates and avoid "
-            "suggesting tracks you've already heard."
+            "**No listening history found.** "
+            "Please go back to Step 2 and upload your Last.fm or Spotify CSV, "
+            "or choose the demo mode option."
         )
         if st.button("← Back to Step 2"):
             _go(2)
         return
-
-    csv_path = Path(csv_path_str)
-    source   = st.session_state.get("source") or "lastfm"
-
-    # Build a lane string for the existing recommender interface
-    lane_str = f"{temperature} / {genre_str} / {decade_str}"
-
-    # Parse the full CSV to get known_tracks, known_tracks_by_plays, known_titles.
-    # These drive the "do not recommend already-heard tracks" safety filters.
-    from history import AnchorPool as _AP, parse_history_csv
-    try:
-        stats, total_scrobbles, _fmt = parse_history_csv(csv_path, source)
-    except Exception as e:
-        st.error(f"**Could not parse listening history CSV:** {e}")
-        return
-
-    # known_tracks: full set of (artist_lower, track_lower) from history
-    known_tracks: frozenset = frozenset(
-        (artist.strip().lower(), track.strip().lower())
-        for artist, s in stats.items()
-        for track, _ in s.top_tracks
-    )
-
-    # known_tracks_by_plays: top 300 by plays for the prompt's "do not recommend" list
-    _all_ktp = sorted(
-        (
-            (artist, track, plays)
-            for artist, s in stats.items()
-            for track, plays in s.top_tracks
-        ),
-        key=lambda x: -x[2],
-    )
-    known_tracks_by_plays = _all_ktp[:300]
-
-    # known_titles: normalised track titles cross-artist (cover dedup filter)
-    _title_plays: dict[str, int] = {}
-    for artist, s in stats.items():
-        for track, plays in s.top_tracks:
-            key = track.strip().lower()
-            _title_plays[key] = _title_plays.get(key, 0) + plays
-    known_titles: frozenset = frozenset(_title_plays.keys())
 
     # Build AnchorPool — tracks come from the pre-indexed JSON filter,
     # but known_* fields come from the full CSV history.
@@ -1161,15 +1200,17 @@ def _execute_run(pool, state, p, api_key):
                                 for t in pool]
     ap.purged_artists       = []
     ap.total_scrobbles      = total_scrobbles
-    ap.total_artists        = len(stats)
+    ap.total_artists        = total_artists
     ap.eligible_count       = len({t["artist"] for t in pool})
     ap.known_tracks         = known_tracks
     ap.known_tracks_by_plays = known_tracks_by_plays
     ap.known_titles         = known_titles
 
+    _csv_path_for_config = Path(csv_path_str) if csv_path_str else Path("/dev/null")
+    _source_for_config   = st.session_state.get("source") or "lastfm"
     config = RunConfig(
-        history_csv=csv_path,
-        source=source,
+        history_csv=_csv_path_for_config,
+        source=_source_for_config,
         lane=lane_str,
         project=st.session_state.project,
         vibe_focus="",
