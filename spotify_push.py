@@ -108,11 +108,10 @@ def push_playlist(
             "not_found":     list[str],   # "Artist — Track" for unmatched tracks
         }
     """
-    playlist = sp.user_playlist_create(
-        user=user_id,
-        name=name,
-        public=public,
-        description=description,
+    # POST /v1/me/playlists — preferred over /v1/users/{id}/playlists for post-2024 apps
+    playlist = sp._post(
+        "me/playlists",
+        payload={"name": name, "public": public, "description": description},
     )
     playlist_url = playlist["external_urls"]["spotify"]
 
