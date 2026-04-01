@@ -922,19 +922,26 @@ def step_jumpoff():
                     st.session_state.playlist_tracks = None
                     st.rerun()
             with col_go:
-                if st.button("Find inspired songs  →", type="primary", use_container_width=True):
-                    # Build a direct anchor pool from the parsed tracks (no History step needed)
+                if st.button("Review & prune  →", type="primary", use_container_width=True):
+                    # Load parsed tracks into the anchor pool raw — user prunes in step 8
                     pool = [{"artist": _fix_text(t["artist"]),
                              "track":  _fix_text(t["track"]),
-                             "plays":  1} for t in parsed]
-                    st.session_state.anchor_pool_tracks = pool
+                             "plays":  1,
+                             "pocket": "general",
+                             "genre":  "—",
+                             "decade": "—"} for t in parsed]
                     st.session_state.anchor_pool_raw    = pool
+                    st.session_state.anchor_pool_tracks = None
+                    st.session_state.result             = None
                     st.session_state.demo_mode          = True
                     st.session_state.project            = "marlonrando"
                     st.session_state.source             = "lastfm"
                     st.session_state.state_obj          = load_state(
                         _state_file("marlonrando"))
-                    _go(9)   # jump straight to Run step
+                    # Pre-check all anchor pool checkboxes
+                    for _i in range(len(pool)):
+                        st.session_state[f"anchor_sel_{_i}"] = True
+                    _go(8)   # go to Anchor Pool to prune before generating
             return
 
     # ── Option A or B not yet parsed — show navigation ──────────────────────
@@ -1434,17 +1441,24 @@ def step_anchor_pool():
     genre       = st.session_state.genre
     decade      = st.session_state.decade
 
-    genre_display = ", ".join(genre) if isinstance(genre, list) and genre else "Any"
-    decade_display = ", ".join(decade) if isinstance(decade, list) and decade else "Any"
-    filter_parts = [f"Temperature: **{temperature}**", f"Genre: **{genre_display}**"]
-    if (isinstance(decade, list) and decade) or (isinstance(decade, str) and decade != "Any"):
-        filter_parts.append(f"Decade: **{decade_display}**")
-    st.markdown("  ·  ".join(filter_parts))
-    st.markdown(
-        "These tracks are your strongest taste signals within your prescribed musical lanes. "
-        "They'll drive adjacency scoring and ultimately inspire the songs that are recommended. "
-        "Uncheck any you'd like to remove, if they don't quite describe the vibe you're going for."
-    )
+    if st.session_state.get("jumpoff_mode") == "B":
+        st.markdown("**Source:** Parsed from uploaded playlist screenshots")
+        st.markdown(
+            "These are the tracks from your uploaded playlist. "
+            "They'll inspire the recommendations — uncheck any that don't represent the vibe you're going for."
+        )
+    else:
+        genre_display = ", ".join(genre) if isinstance(genre, list) and genre else "Any"
+        decade_display = ", ".join(decade) if isinstance(decade, list) and decade else "Any"
+        filter_parts = [f"Temperature: **{temperature}**", f"Genre: **{genre_display}**"]
+        if (isinstance(decade, list) and decade) or (isinstance(decade, str) and decade != "Any"):
+            filter_parts.append(f"Decade: **{decade_display}**")
+        st.markdown("  ·  ".join(filter_parts))
+        st.markdown(
+            "These tracks are your strongest taste signals within your prescribed musical lanes. "
+            "They'll drive adjacency scoring and ultimately inspire the songs that are recommended. "
+            "Uncheck any you'd like to remove, if they don't quite describe the vibe you're going for."
+        )
 
     state: ProjectState = st.session_state.state_obj or ProjectState()
     p = st.session_state.params
@@ -1611,6 +1625,10 @@ def step_run():
         if st.button("🎵  Generate Recommendations", type="primary",
                      disabled=not api_key or not pool, use_container_width=True):
             _execute_run(pool, state, p, api_key)
+        st.markdown(
+            "<small style='color:#555;'>⏱ Generation typically takes about 60 seconds.</small>",
+            unsafe_allow_html=True,
+        )
 
 
 def _execute_run(pool, state, p, api_key):
@@ -1747,24 +1765,32 @@ def _show_results(result: RecommendationResult):
     batch_size = st.session_state.get("params", {}).get("batch_size", len(recs))
     n_backfill = sum(1 for r in recs if r.backfill)
     n_confident = len(recs) - n_backfill
+    n_returned  = len(recs)
 
     # Header summary
-    summary = f"**{len(recs)} recommendations generated** — {result.tokens_used:,} tokens used"
-    st.success(summary)
+    st.success(f"**{n_returned} recommendations generated** — {result.tokens_used:,} tokens used")
 
-    if n_backfill:
-        st.info(
-            f"**{n_confident} tracks** met full confidence thresholds. "
-            f"**{n_backfill} track{'s' if n_backfill != 1 else ''} backfilled** "
-            f"to reach your requested batch of {batch_size} — shown with a ↓ marker below."
-        )
+    # Accurate backfill / short-batch messaging
+    if n_backfill or n_returned < batch_size:
+        _parts = []
+        if n_backfill:
+            _parts.append(
+                f"**{n_confident}** track{'s' if n_confident != 1 else ''} met full "
+                f"confidence thresholds · **{n_backfill}** backfilled (↓)"
+            )
+        if n_returned < batch_size:
+            _parts.append(f"**{n_returned} of {batch_size}** requested tracks returned")
+        st.info(" · ".join(_parts))
 
-    # Ensure every track starts checked — value=True is the fallback when a key
-    # is absent; _execute_run clears these keys before each new run so returning
-    # users always see a fresh, fully-checked list.
+    # Pre-initialise checkbox state BEFORE widgets render so user deselections
+    # are never overwritten by a value= default on re-render.
+    for i in range(n_returned):
+        if f"track_sel_{i}" not in st.session_state:
+            st.session_state[f"track_sel_{i}"] = True
+
     st.markdown("**Select tracks to include in your playlist** — uncheck any you'd like to remove:")
     st.markdown(
-        "<small style='color:#888'>DCS = Discovery Confidence Score &nbsp;|&nbsp; "
+        "<small>DCS = Discovery Confidence Score &nbsp;|&nbsp; "
         "↓ = backfilled to meet batch size</small>",
         unsafe_allow_html=True,
     )
@@ -1780,7 +1806,9 @@ def _show_results(result: RecommendationResult):
     for i, r in enumerate(recs):
         c0, c1, c2, c3, c4 = st.columns([0.35, 1.8, 2.2, 0.55, 5])
         with c0:
-            st.checkbox("", value=True, key=f"track_sel_{i}", label_visibility="collapsed")
+            # No value= param — state is pre-initialised above so user
+            # deselections survive script reruns without being reset.
+            st.checkbox("", key=f"track_sel_{i}", label_visibility="collapsed")
         artist_label = f"<small>{r.artist}</small>"
         track_label  = (
             f"<small style='color:#aaa'>{r.track} ↓</small>"
@@ -1794,6 +1822,7 @@ def _show_results(result: RecommendationResult):
             unsafe_allow_html=True)
         c4.markdown(f"<small>{r.rationale}</small>", unsafe_allow_html=True)
 
+    # Read deselections AFTER all checkboxes have rendered
     selected_recs = [r for i, r in enumerate(recs)
                      if st.session_state.get(f"track_sel_{i}", True)]
     n_sel = len(selected_recs)
