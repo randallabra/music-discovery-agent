@@ -34,28 +34,37 @@ LOGO_SOUNDIIZ = ASSETS_DIR / "logo_soundiiz.png"
 
 TEMPERATURE_OPTIONS = [
     "Any",
-    "Quiet",
     "Aggressive",
-    "Electronic",
-    "Happy",
-    "Mid-Range",
+    "Acoustic",
+    "Roots & Americana",
+    "Party",
+    "Sad",
+    "Rock",
+    "Instrumental",
+    "Ambient",
 ]
 
 TEMPERATURE_POCKET_MAP = {
-    "Quiet":      "quiet",
-    "Aggressive": "aggressive",
-    "Electronic": "electronic",
-    "Happy":      "happy",
-    "Mid-Range":  "blob",
+    "Aggressive":        "aggressive",
+    "Acoustic":          "acoustic",
+    "Roots & Americana": "acoustic_raw",
+    "Party":             "party",
+    "Sad":               "sad",
+    "Rock":              "rock",
+    "Instrumental":      "instrumental",
+    "Ambient":           "ambient",
 }
 
 TEMPERATURE_DESCRIPTIONS = {
-    "Any":        "No temperature filter — draw from the full anchor pool.",
-    "Quiet":      "Introspective, low-energy, acoustic or spare arrangements. Folk, blues, singer-songwriter, quiet rock.",
-    "Aggressive": "High-energy, loud, or emotionally intense. Grunge, hard rock, metal, punk, garage.",
-    "Electronic": "Synthesizer-driven, rhythmically propulsive, or production-forward. New wave, synth-pop, IDM, post-punk with electronics.",
-    "Happy":      "Bright, warm, energetic. Pop-rock, funk, soul, britpop, indie pop, jangle.",
-    "Mid-Range":  "Acoustically ambiguous. Artists and tracks that straddle multiple temperatures — Pearl Jam, Pink Floyd, Neil Young.",
+    "Any":               "No filter — draw from the full anchor pool across all pockets.",
+    "Aggressive":        "High-energy, intense, abrasive. Metal, punk, grunge, industrial, hardcore.",
+    "Acoustic":          "Acoustic-instrument forward. Folk, fingerpicking, singer-songwriter, unplugged arrangements.",
+    "Roots & Americana": "Cultural roots tradition. Blues, Americana, country, gospel, bluegrass, old-time. Defined by genre lineage, not emotional register.",
+    "Party":             "Danceable and high-tempo. Groove, funk, dance, club. High energy meets high valence.",
+    "Sad":               "Emotionally heavy, melancholic. Sadness is the dominant mood regardless of sonic texture.",
+    "Rock":              "Classic, alternative, indie, and post-punk rock. Vocal-forward, mid-energy.",
+    "Instrumental":      "Primarily instrumental. Post-rock, jazz, ambient rock, high-tempo without prominent vocals.",
+    "Ambient":           "Very quiet, highly atmospheric. Classical, ambient, drone, sparse arrangements.",
 }
 
 GENRE_OPTIONS = [
@@ -80,15 +89,16 @@ GENRE_OPTIONS = [
 DECADE_OPTIONS = ["Any", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"]
 
 STEP_LABELS = [
-    "Overview",
-    "History",
-    "Profile",
-    "Parameters",
-    "Blacklist",
-    "Temperature",
-    "Anchor Pool",
-    "Run",
-    "Export",
+    "Overview",     # 1
+    "Start",        # 2 — Jumping Off Point (new)
+    "History",      # 3
+    "Profile",      # 4
+    "Parameters",   # 5
+    "Blacklist",    # 6
+    "Temperature",  # 7
+    "Anchor Pool",  # 8
+    "Run",          # 9
+    "Export",       # 10
 ]
 
 # ─────────────────────────────────────────────────────────────
@@ -118,9 +128,12 @@ def _init():
             "max_unique_tracks": 20,
             "min_unique_albums": 3,
             "min_track_plays":   3,
-            "batch_size":        35,
+            "batch_size":        20,
             "anchor_pool_size":  20,
         },
+        # Jumping Off Point selection (path A or B)
+        "jumpoff_mode":      "A",
+        "playlist_tracks":   None,  # parsed tracks from Option B screenshot upload
         # New discovery selectors
         "temperature":       "Any",
         "genre":             [],
@@ -149,10 +162,73 @@ _init()
 #  Track index loader
 # ─────────────────────────────────────────────────────────────
 
+def _load_pocket_index_from_db(profile: str) -> dict:
+    """
+    Load anchor-eligible tracks for a profile from track_universe.db pocket_scores table.
+    Returns same dict format as _load_index: key → {artist, track, plays, pocket, genre, decade}
+    Returns empty dict if DB not available or profile has no pocket scores.
+    """
+    import sqlite3 as _sq
+    db_path = AGENT_DIR / "track_universe.db"
+    if not db_path.exists():
+        return {}
+    try:
+        con = _sq.connect(db_path)
+        # Build a pockets-per-track map (track_key → [pocket, ...])
+        pocket_rows = con.execute("""
+            SELECT ps.track_key, ps.pocket
+            FROM pocket_scores ps
+            WHERE ps.anchor_eligible = 1
+              AND ps.action = 'included'
+              AND ps.profile = ?
+        """, (profile,)).fetchall()
+        pockets_map: dict[str, list[str]] = {}
+        for tk, pocket in pocket_rows:
+            pockets_map.setdefault(tk, []).append(pocket)
+
+        rows = con.execute("""
+            SELECT ps.profile, ps.track_key, ps.pocket, ps.final_score,
+                   t.artist, t.title, up.plays
+            FROM pocket_scores ps
+            JOIN tracks t          ON ps.track_key = t.track_key
+            JOIN user_profiles up  ON ps.profile = up.username
+                                  AND ps.track_key = up.track_key
+            WHERE ps.anchor_eligible = 1
+              AND ps.action = 'included'
+              AND ps.profile = ?
+            GROUP BY ps.track_key
+        """, (profile,)).fetchall()
+        con.close()
+        index = {}
+        for prof, tk, pocket, score, artist, title, plays in rows:
+            all_pockets = pockets_map.get(tk, [pocket or "general"])
+            index[f"{prof}||{tk}"] = {
+                "artist":  artist or "?",
+                "track":   title  or "?",
+                "plays":   int(plays or 0),
+                "pocket":  pocket or "general",
+                "pockets": all_pockets,
+                "genre":   "Other",
+                "decade":  "—",
+            }
+        return index
+    except Exception:
+        return {}
+
+
 @st.cache_data(show_spinner=False)
 def _load_index(profile: str) -> dict:
-    """Load pre-indexed track data for a given profile.
-    Checks the app directory first (for cloud deployments), then ~/.music-agent/."""
+    """
+    Load anchor-eligible track data for a given profile.
+    Priority:
+      1. track_universe.db pocket_scores (anchor_eligible=1) — new pocket system
+      2. {profile}_track_index.json in app dir — legacy fallback
+      3. ~/.music-agent/{profile}_track_index.json — legacy fallback
+    """
+    db_index = _load_pocket_index_from_db(profile)
+    if db_index:
+        return db_index
+    # Legacy fallback
     app_dir = Path(__file__).parent
     for path in [app_dir / f"{profile}_track_index.json",
                  AGENT_DIR / f"{profile}_track_index.json"]:
@@ -186,8 +262,11 @@ def _filter_index(
                ("white noise","sleep","binaural","meditation","rain sounds",
                 "nature sounds","baby sleep","lullaby machine")):
             continue
-        if pocket_filter and t.get("pocket") != pocket_filter:
-            continue
+        if pocket_filter:
+            # "pockets" is a list field (v4); "pocket" is the legacy scalar field
+            track_pockets = t.get("pockets") or [t.get("pocket", "")]
+            if pocket_filter not in track_pockets:
+                continue
         if genre_lower_set and t.get("genre","").lower() not in genre_lower_set:
             continue
         if decade_set and t.get("decade") not in decade_set:
@@ -204,6 +283,163 @@ def _filter_index(
 
     # Return full filtered list sorted by plays — caller applies any artist cap
     return sorted(results, key=lambda x: -x["plays"])
+
+# ─────────────────────────────────────────────────────────────
+#  Text normalisation (mojibake + Unicode fixes for display)
+# ─────────────────────────────────────────────────────────────
+
+_MOJIBAKE = {
+    "√ñ": "Ö", "√º": "ü", "√§": "ä", "√¥": "ö", "√ü": "Ü",
+    "√Ä": "À", "√Å": "Á", "√â": "Â", "√Ç": "Ç", "√©": "é",
+    "√®": "è", "√ê": "ê", "√ë": "ë", "√≠": "í", "√î": "î",
+    "√ï": "ï", "√ì": "ì", "√ó": "ó", "√ô": "ô", "√ò": "ò",
+    "√ú": "ú", "√Ø": "Ø", "√∏": "ø", "√§": "ä",
+    "Ã¶": "ö", "Ã¼": "ü", "Ã¤": "ä", "Ã–": "Ö", "Ãœ": "Ü",
+    "Ã©": "é", "Ã¨": "è", "Ã¢": "â", "Ã ": "à", "Ã®": "î",
+    "Ã¯": "ï", "Ã³": "ó", "Ã²": "ò", "Ã´": "ô", "Ã»": "û",
+    "Ã±": "ñ", "â€™": "'", "â€œ": "\u201c", "â€\x9d": "\u201d",
+    "â€\x93": "\u2013", "â€\x94": "\u2014",
+}
+
+def _fix_text(s: str) -> str:
+    """Fix common mojibake and encoding artefacts in artist/track names."""
+    if not s:
+        return s
+    import unicodedata
+    for bad, good in _MOJIBAKE.items():
+        if bad in s:
+            s = s.replace(bad, good)
+    try:
+        s = unicodedata.normalize("NFC", s)
+    except Exception:
+        pass
+    return s
+
+
+# ─────────────────────────────────────────────────────────────
+#  Last.fm API fetch (user.getRecentTracks)
+# ─────────────────────────────────────────────────────────────
+
+def _fetch_lastfm_history(username: str, max_tracks: int = 3000) -> list[dict]:
+    """
+    Fetch recent scrobbles for a Last.fm user via the API.
+    Returns list of {"artist": ..., "track": ..., "date": ...} dicts.
+    Requires LASTFM_API_KEY in secrets.toml.
+    """
+    import urllib.request, urllib.parse, json as _json
+    try:
+        api_key = st.secrets.get("LASTFM_API_KEY", "") or ""
+    except Exception:
+        api_key = ""
+    if not api_key:
+        raise ValueError("LASTFM_API_KEY not set in .streamlit/secrets.toml")
+
+    tracks: list[dict] = []
+    page = 1
+    per_page = 200
+
+    while len(tracks) < max_tracks:
+        params = {
+            "method":    "user.getRecentTracks",
+            "user":      username,
+            "api_key":   api_key,
+            "format":    "json",
+            "limit":     str(per_page),
+            "page":      str(page),
+        }
+        url = "https://ws.audioscrobbler.com/2.0/?" + urllib.parse.urlencode(params)
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = _json.loads(resp.read())
+
+        if "error" in data:
+            raise ValueError(f"Last.fm API error {data['error']}: {data.get('message','')}")
+
+        items = data.get("recenttracks", {}).get("track", [])
+        if not items:
+            break
+
+        for item in items:
+            # Skip "now playing" pseudo-entry
+            if isinstance(item.get("@attr"), dict) and item["@attr"].get("nowplaying"):
+                continue
+            artist = item.get("artist", {})
+            artist_name = artist.get("#text", "") if isinstance(artist, dict) else str(artist)
+            track_name  = item.get("name", "")
+            date_txt    = (item.get("date") or {}).get("#text", "")
+            if artist_name and track_name:
+                tracks.append({"artist": artist_name, "track": track_name, "date": date_txt})
+
+        total_pages = int(
+            data.get("recenttracks", {}).get("@attr", {}).get("totalPages", 1)
+        )
+        if page >= total_pages or len(tracks) >= max_tracks:
+            break
+        page += 1
+        import time as _t; _t.sleep(0.25)   # respect ~4/s rate limit
+
+    return tracks[:max_tracks]
+
+
+def _lastfm_tracks_to_csv_bytes(tracks: list[dict]) -> bytes:
+    """Serialise fetched scrobbles into the ghan.nl CSV format expected by parse_history_csv."""
+    import io as _io, csv as _csv
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["uts", "utc_time", "artist", "album", "track", "track_mbid"])
+    for t in tracks:
+        w.writerow(["", t.get("date",""), t.get("artist",""), "", t.get("track",""), ""])
+    return buf.getvalue().encode("utf-8")
+
+
+# ─────────────────────────────────────────────────────────────
+#  Playlist image parser (Option B — screenshot upload)
+# ─────────────────────────────────────────────────────────────
+
+def _parse_playlist_images(images: list, api_key: str) -> list[dict]:
+    """
+    Use Claude Vision to extract an artist/track list from playlist screenshot images.
+    Returns list of {"artist": ..., "track": ...} dicts.
+    """
+    import anthropic, base64 as _b64
+    client = anthropic.Anthropic(api_key=api_key)
+
+    content: list = [{
+        "type": "text",
+        "text": (
+            "These are screenshots of a music playlist. "
+            "Extract every song visible across all images. "
+            "Return ONLY valid JSON — a list of objects, each with 'artist' and 'track' keys. "
+            "Be exact with names. Do not include any other text, markdown, or explanation."
+        ),
+    }]
+    for img in images:
+        content.append({
+            "type": "image",
+            "source": {
+                "type":       "base64",
+                "media_type": img["media_type"],
+                "data":       img["data"],
+            },
+        })
+
+    resp = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": content}],
+    )
+    raw = resp.content[0].text.strip()
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    import json as _j
+    parsed = _j.loads(raw.strip())
+    if isinstance(parsed, list):
+        return [{"artist": str(r.get("artist","")), "track": str(r.get("track",""))}
+                for r in parsed if r.get("artist") and r.get("track")]
+    return []
+
 
 # ─────────────────────────────────────────────────────────────
 #  Spotify helpers (unchanged from v1)
@@ -228,7 +464,7 @@ def _handle_spotify_callback():
     if error and not code:
         st.session_state.spotify_auth_error = f"Spotify returned: {error}"
         st.query_params.clear()
-        st.session_state.step = 9
+        st.session_state.step = 10
         st.rerun()
 
     if not code:
@@ -240,7 +476,7 @@ def _handle_spotify_callback():
     if not client_id or not client_secret:
         st.session_state.spotify_auth_error = "Spotify credentials missing from app secrets."
         st.query_params.clear()
-        st.session_state.step = 9
+        st.session_state.step = 10
         st.rerun()
     try:
         from spotify_push import make_oauth, exchange_code as _exc, make_client, get_current_user
@@ -255,7 +491,7 @@ def _handle_spotify_callback():
     except Exception as e:
         st.session_state.spotify_auth_error = str(e)
         st.query_params.clear()
-        st.session_state.step = 9   # land on Export so the error is visible
+        st.session_state.step = 10   # land on Export so the error is visible
         st.rerun()
     if profile:
         st.session_state.project = profile
@@ -266,7 +502,7 @@ def _handle_spotify_callback():
         if last:
             st.session_state.result = last
     st.query_params.clear()
-    st.session_state.step = 9
+    st.session_state.step = 10
     st.rerun()   # clean rerun — lands on Export with token already in session state
 
 # ─────────────────────────────────────────────────────────────
@@ -441,16 +677,17 @@ def step_overview():
       engine build your playlist.</p>
 
       <h4>How songs are understood</h4>
-      <p>Temperature classification is grounded in acoustic measurements drawn from
-      <b>AcousticBrainz</b> and the <b>Million Song Dataset</b> — two large-scale
-      research databases that encode the sonic properties of millions of songs: energy
-      level, brightness, rhythmic intensity, and the qualities that make a track feel
-      quiet, aggressive, electronic, or euphoric.</p>
-      <p>Where direct measurements aren't available for a song, the system fills the
-      gap by looking at its <b>related songs</b> — tracks with known acoustic profiles
-      that sit close to it in the similarity graph. Their measured qualities inform a
-      <b>similarity score</b> for the unmeasured track, extending confident temperature
-      classification to songs that no database has explicitly tagged.</p>
+      <p>Temperature classification is grounded in acoustic measurements from two
+      complementary sources: <b>ReccoBeats</b>, which provides the same audio feature
+      set as Spotify's API — energy, valence, danceability, acousticness, tempo, and
+      more — and <b>SoundNet</b>, which adds coverage for tracks not yet in ReccoBeats.
+      Together they cover over 11,000 songs in the catalog with direct acoustic
+      measurement, with more being added continuously.</p>
+      <p>For tracks not yet acoustically measured, the system assigns a temperature
+      by comparing their <b>genre and tag fingerprint</b> against the acoustic cluster
+      centroids — finding the musical lane whose acoustically-confirmed members share
+      the most genre DNA with the unmeasured track. Coverage and accuracy improve
+      automatically as acoustic enrichment continues in the background.</p>
 
       <h4>Decision Science</h4>
       <div class="score"><span class="badge">TGE 45%</span>
@@ -558,12 +795,126 @@ def step_product_design():
 
 
 # ─────────────────────────────────────────────────────────────
-#  Step 2 — Listening History
+#  Step 2 — Jumping Off Point
+# ─────────────────────────────────────────────────────────────
+
+def step_jumpoff():
+    st.title("Music Discovery Agent")
+    st.subheader("Step 2 — Choose Your Starting Point")
+    st.markdown("")
+
+    mode = st.radio(
+        "How would you like to start?",
+        options=["A", "B"],
+        format_func=lambda x: (
+            "Build a playlist from your listening history  —  choose a musical lane (temperature, mood, feel), "
+            "backstopped by your specific listening history"
+            if x == "A" else
+            "Start from a favorite playlist  —  upload screenshots of a playlist and get up to 20 songs inspired by it"
+        ),
+        index=0 if st.session_state.get("jumpoff_mode","A") == "A" else 1,
+        label_visibility="collapsed",
+    )
+
+    st.markdown("")
+
+    if mode == "B":
+        st.markdown("#### Upload playlist screenshots")
+        st.caption(
+            "Scroll through your playlist and take screenshots — as many as needed to capture all the tracks. "
+            "The agent will read the tracklist and recommend up to 20 new songs inspired by it, "
+            "using Last.fm co-listening data and critic mention scoring."
+        )
+        uploaded_imgs = st.file_uploader(
+            "Upload screenshots",
+            type=["png","jpg","jpeg","webp"],
+            accept_multiple_files=True,
+            key="playlist_screenshots",
+        )
+
+        if uploaded_imgs:
+            st.success(f"✓  {len(uploaded_imgs)} image{'s' if len(uploaded_imgs) > 1 else ''} uploaded")
+
+            api_key = ""
+            try:
+                api_key = st.secrets.get("ANTHROPIC_API_KEY","") or ""
+            except Exception:
+                pass
+            if not api_key:
+                import os as _os
+                api_key = _os.environ.get("ANTHROPIC_API_KEY","")
+
+            parse_col, _ = st.columns([2, 3])
+            with parse_col:
+                if st.button("📋  Parse tracklist from images", type="primary",
+                             disabled=not api_key, use_container_width=True):
+                    with st.spinner("Reading your playlist…"):
+                        try:
+                            import base64 as _b64
+                            imgs = []
+                            for f in uploaded_imgs:
+                                raw = f.read()
+                                mt  = f.type or "image/jpeg"
+                                imgs.append({"media_type": mt, "data": _b64.b64encode(raw).decode()})
+                            tracks = _parse_playlist_images(imgs, api_key)
+                            st.session_state.playlist_tracks = tracks
+                            st.session_state.jumpoff_mode    = "B"
+                        except Exception as e:
+                            st.error(f"Could not parse images: {e}")
+
+        parsed = st.session_state.get("playlist_tracks")
+        if parsed:
+            st.markdown(f"**{len(parsed)} tracks found:**")
+            for i, t in enumerate(parsed[:30]):
+                st.markdown(
+                    f"<small>{i+1}. {_fix_text(t['artist'])} — {_fix_text(t['track'])}</small>",
+                    unsafe_allow_html=True,
+                )
+            if len(parsed) > 30:
+                st.caption(f"…and {len(parsed)-30} more")
+
+            st.markdown("")
+            col_back, col_go = st.columns([1, 2])
+            with col_back:
+                if st.button("← Back"):
+                    st.session_state.playlist_tracks = None
+                    st.rerun()
+            with col_go:
+                if st.button("Find inspired songs  →", type="primary", use_container_width=True):
+                    # Build a direct anchor pool from the parsed tracks (no History step needed)
+                    pool = [{"artist": _fix_text(t["artist"]),
+                             "track":  _fix_text(t["track"]),
+                             "plays":  1} for t in parsed]
+                    st.session_state.anchor_pool_tracks = pool
+                    st.session_state.anchor_pool_raw    = pool
+                    st.session_state.demo_mode          = True
+                    st.session_state.project            = "marlonrando"
+                    st.session_state.source             = "lastfm"
+                    st.session_state.state_obj          = load_state(
+                        _state_file("marlonrando"))
+                    _go(9)   # jump straight to Run step
+            return
+
+    # ── Option A or B not yet parsed — show navigation ──────────────────────
+    st.markdown("")
+    col_back, col_next = st.columns(2)
+    with col_back:
+        if st.button("← Back"):
+            _go(1)
+    with col_next:
+        if st.button("Next →", type="primary",
+                     disabled=(mode == "B")):   # B requires parsing first
+            st.session_state.jumpoff_mode = mode
+            _go(3)   # continue to Listening History
+
+
+# ─────────────────────────────────────────────────────────────
+#  Step 3 — Listening History
 # ─────────────────────────────────────────────────────────────
 
 def step_history():
     st.title("Music Discovery Agent")
-    st.subheader("Step 2 — Listening History")
+    st.subheader("Step 3 — Listening History")
 
     project = st.session_state.get("project","")
     if project:
@@ -583,22 +934,64 @@ def step_history():
         "this CSV powers the recommendation candidate scoring."
     )
 
+    # ── Check for Last.fm API key ─────────────────────────────────────────────
+    _lfm_api_key = ""
+    try:
+        _lfm_api_key = st.secrets.get("LASTFM_API_KEY", "") or ""
+    except Exception:
+        pass
+
     left, mid, right = st.columns([10, 0.08, 10], gap="small")
     with left:
         st.markdown("#### Last.fm")
+
+        # Username input — fetch directly via API if key is configured
+        _lfm_username = st.text_input(
+            "Last.fm username",
+            placeholder="e.g.  marlonrando",
+            key="lastfm_username_input",
+        )
+        if _lfm_username.strip():
+            if _lfm_api_key:
+                if st.button("Fetch history from Last.fm →", key="lastfm_fetch_btn",
+                             use_container_width=True):
+                    with st.spinner(f"Fetching scrobbles for {_lfm_username.strip()}…"):
+                        try:
+                            _lfm_tracks = _fetch_lastfm_history(_lfm_username.strip(), max_tracks=3000)
+                            _lfm_csv    = _lastfm_tracks_to_csv_bytes(_lfm_tracks)
+                            st.session_state["_lastfm_fetched_csv"]  = _lfm_csv
+                            st.session_state["_lastfm_fetched_name"] = (
+                                f"{_lfm_username.strip()}_history.csv"
+                            )
+                            st.success(f"✓  Fetched {len(_lfm_tracks):,} scrobbles")
+                        except Exception as _e:
+                            st.error(f"Could not fetch Last.fm history: {_e}")
+            else:
+                st.caption("_(LASTFM_API_KEY not set in secrets.toml — add it to enable direct fetch)_")
+
+        _fetched_csv  = st.session_state.get("_lastfm_fetched_csv")
+        _fetched_name = st.session_state.get("_lastfm_fetched_name", "lastfm_history.csv")
+        if _fetched_csv:
+            st.success(f"✓  Using fetched Last.fm history: {_fetched_name}")
+
+        st.markdown("")
         st.markdown(
-            "Export your complete lifetime history at "
+            "Or export your complete lifetime history at "
             "[lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/)\n\n"
             "⏱ Usually ready in under a minute"
         )
         lastfm_file = st.file_uploader("Upload Last.fm CSV", type=["csv"], key="lastfm_upload")
         if lastfm_file:
             st.success(f"✓  {lastfm_file.name}  ({lastfm_file.size:,} bytes)")
+
     with mid:
-        st.markdown("<div style='border-left:1px solid #333;height:360px;'></div>",
+        st.markdown("<div style='border-left:1px solid #333;height:480px;'></div>",
                     unsafe_allow_html=True)
     with right:
         st.markdown("#### Spotify")
+        st.markdown("")   # vertical spacer to align with Last.fm username input + fetch button
+        st.markdown("")
+        st.markdown("")
         st.markdown(
             "Request your data at "
             "[spotify.com/us/account/privacy](https://www.spotify.com/us/account/privacy/)\n\n"
@@ -625,24 +1018,19 @@ def step_history():
 
     if demo_chosen:
         st.info(
-            "**Demo mode** — you'll be exploring the app using **marlonrando**'s "
-            "pre-indexed listening history (12,899 tracks). "
+            "**Demo mode** — you'll be exploring the app using the pre-indexed listening history "
+            "from **marlonrando** + **teddxn** (20,515 tracks with 3+ plays). "
             "All filters, Temperature, Anchor Pool, and recommendation engine work exactly "
             "as they would with your own data."
         )
 
-    st.markdown("---")
-    st.markdown("#### Or fetch directly from Last.fm")
-    st.caption(
-        "**Direct Last.fm API import coming soon** — no CSV download needed.\n\n"
-        "In the meantime, export your full history instantly at "
-        "[lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/)."
-    )
-
+    _have_lastfm = bool(_fetched_csv or lastfm_file)
     uploaded = None; source = None
     if not demo_chosen:
-        if lastfm_file and spotify_file:
+        if _have_lastfm and spotify_file:
             st.warning("Please upload from one service at a time.")
+        elif _fetched_csv:
+            uploaded, source = "fetched", "lastfm"
         elif lastfm_file:
             uploaded, source = lastfm_file, "lastfm"
         elif spotify_file:
@@ -653,31 +1041,37 @@ def step_history():
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
-            _go(1)
+            _go(2)
     with col_next:
         if st.button("Next →", type="primary", disabled=not next_enabled):
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
             if demo_chosen:
                 st.session_state.demo_mode    = True
                 st.session_state.tmp_csv_path = None
-                st.session_state.csv_filename = "(demo — marlonrando)"
+                st.session_state.csv_filename = "(demo — marlonrando + teddxn)"
                 st.session_state.source       = "lastfm"
                 st.session_state.project      = "marlonrando"
             else:
-                st.session_state.demo_mode    = False
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-                tmp.write(uploaded.read()); tmp.flush()
-                st.session_state.tmp_csv_path = tmp.name
-                st.session_state.csv_filename = uploaded.name
-                st.session_state.source       = source
-            _go(3)
+                st.session_state.demo_mode = False
+                if uploaded == "fetched":
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+                    tmp.write(_fetched_csv); tmp.flush()
+                    st.session_state.tmp_csv_path = tmp.name
+                    st.session_state.csv_filename = _fetched_name
+                    st.session_state.source       = "lastfm"
+                else:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+                    tmp.write(uploaded.read()); tmp.flush()
+                    st.session_state.tmp_csv_path = tmp.name
+                    st.session_state.csv_filename = uploaded.name
+                    st.session_state.source       = source
+            _go(4)
 
 # ─────────────────────────────────────────────────────────────
 #  Step 3 — Profile
 # ─────────────────────────────────────────────────────────────
 
 def step_profile():
-    st.subheader("Step 3 — Listener Profile")
+    st.subheader("Step 4 — Listener Profile")
     st.caption("The profile name maps to your pre-indexed listening data, blacklist, and session history.")
 
     left, right = st.columns([1, 1.2], gap="large")
@@ -691,12 +1085,12 @@ def step_profile():
         col_back, col_next = st.columns(2)
         with col_back:
             if st.button("← Back"):
-                _go(2)
+                _go(3)
         with col_next:
             if st.button("Next →", type="primary", disabled=not project):
                 st.session_state.project   = project
                 st.session_state.state_obj = load_state(_state_file(project))
-                _go(4)
+                _go(5)
     with right:
         if project:
             idx = _load_index(project)
@@ -764,7 +1158,7 @@ def step_profile():
 # ─────────────────────────────────────────────────────────────
 
 def step_parameters():
-    st.subheader("Step 4 — Discovery Parameters")
+    st.subheader("Step 5 — Discovery Parameters")
     st.info(
         "**Goal:** Recommend new songs by under-explored or new-to-you artists, "
         "driven by song-level taste adjacency — not 'similar artists.'\n\n"
@@ -794,13 +1188,13 @@ def step_parameters():
             "Tracks to recommend per batch",
             min_value=5, max_value=100, step=5,
             value=p["batch_size"],
-            help="Default 35. You can uncheck any tracks before pushing to Spotify.",
+            help="Default 20. You can uncheck any tracks before pushing to Spotify.",
         )
 
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
-            _go(3)
+            _go(4)
     with col_next:
         if st.button("Next →", type="primary"):
             st.session_state.params = {
@@ -811,14 +1205,14 @@ def step_parameters():
             }
             st.session_state.anchor_pool_raw    = None
             st.session_state.anchor_pool_tracks = None
-            _go(5)
+            _go(6)
 
 # ─────────────────────────────────────────────────────────────
 #  Step 5 — Blacklist
 # ─────────────────────────────────────────────────────────────
 
 def step_blacklist():
-    st.subheader("Step 5 — Blacklist")
+    st.subheader("Step 6 — Blacklist")
     st.caption(
         "Artists listed here will be excluded from your anchor pool and will never appear in recommendations. "
         "Include either artists you know inside out, or artists that fit your tastes but you know you don't like. "
@@ -845,7 +1239,7 @@ def step_blacklist():
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
-            _go(4)
+            _go(5)
     with col_next:
         if st.button("Next →  (set discovery filters)", type="primary"):
             if raw.strip():
@@ -856,14 +1250,19 @@ def step_blacklist():
                     st.session_state.state_obj = state
             st.session_state.anchor_pool_raw    = None
             st.session_state.anchor_pool_tracks = None
-            _go(6)
+            _go(7)
 
 # ─────────────────────────────────────────────────────────────
 #  Step 6 — Discovery (Temperature + Genre + Decade)
 # ─────────────────────────────────────────────────────────────
 
 def step_discovery():
-    st.subheader("Step 6 — Temperature")
+    st.subheader("Step 7 — Temperature")
+    st.info(
+        "We're still collecting acoustic scoring data that will make the song-to-temperature "
+        "classifications even more accurate. For now, if you see songs that are populated but "
+        "misclassified on the next screen, simply remove them from the anchor pool."
+    )
     st.caption(
         "Set the emotional temperature, genre, and era for this run. "
         "These filters will shape your anchor pool — the taste signals the engine builds from, "
@@ -876,40 +1275,65 @@ def step_discovery():
         st.markdown("#### Temperature")
         st.caption("The emotional register and energy level of the tracks you want to anchor from.")
         _t = st.session_state.temperature
-        _t_idx = TEMPERATURE_OPTIONS.index(_t) if _t in TEMPERATURE_OPTIONS else 0
+        # Exclude "Any" from the visible temperature radio
+        _temp_opts = [t for t in TEMPERATURE_OPTIONS if t != "Any"]
+        # If saved temp is "Any" or not in list, default to first option
+        if _t not in _temp_opts:
+            _t = _temp_opts[0]
+        _t_idx = _temp_opts.index(_t)
         temperature = st.radio(
             "Temperature",
-            options=TEMPERATURE_OPTIONS,
+            options=_temp_opts,
             index=_t_idx,
             label_visibility="collapsed",
         )
 
         st.markdown("")
         st.markdown("#### Genre")
-        st.caption("Top 15 genres by catalog size. Check one or more — or leave all unchecked for any.")
+        st.caption("Uncheck specific genres to exclude them — all included by default.")
         _saved_genres = st.session_state.genre if isinstance(st.session_state.genre, list) else []
-        _genre_opts = GENRE_OPTIONS[1:]   # exclude "Any"
-        # Lay out checkboxes in 3 columns
-        _gcols = st.columns(3)
-        genre_selection = [
-            g for i, g in enumerate(_genre_opts)
-            if _gcols[i % 3].checkbox(g, value=(g in _saved_genres), key=f"genre_cb_{g}")
-        ]
+        _genre_all_default = len(_saved_genres) == 0
+        _genre_all = st.checkbox("All genres", value=_genre_all_default, key="genre_all_cb")
+        if not _genre_all:
+            _genre_opts = GENRE_OPTIONS[1:]   # exclude "Any"
+            _gcols = st.columns(3)
+            # Default all to checked when first unchecking "All" (saved_genres empty)
+            genre_selection = [
+                g for i, g in enumerate(_genre_opts)
+                if _gcols[i % 3].checkbox(
+                    g,
+                    value=(_genre_all_default or g in _saved_genres),
+                    key=f"genre_cb_{g}",
+                )
+            ]
+        else:
+            genre_selection = []
 
         st.markdown("")
         st.markdown("#### Decade  *(~90% of catalog has year data)*")
-        st.caption("Check one or more — or leave all unchecked for any decade.")
+        st.caption("Uncheck specific decades to exclude them — all included by default.")
         _saved_decades = st.session_state.decade if isinstance(st.session_state.decade, list) else []
-        _decade_opts = DECADE_OPTIONS[1:]  # exclude "Any"
-        _dcols = st.columns(4)
-        decade_selection = [
-            d for i, d in enumerate(_decade_opts)
-            if _dcols[i % 4].checkbox(d, value=(d in _saved_decades), key=f"decade_cb_{d}")
-        ]
+        _decade_all_default = len(_saved_decades) == 0
+        _decade_all = st.checkbox("All decades", value=_decade_all_default, key="decade_all_cb")
+        if not _decade_all:
+            _decade_opts = DECADE_OPTIONS[1:]  # exclude "Any"
+            _dcols = st.columns(4)
+            decade_selection = [
+                d for i, d in enumerate(_decade_opts)
+                if _dcols[i % 4].checkbox(
+                    d,
+                    value=(_decade_all_default or d in _saved_decades),
+                    key=f"decade_cb_{d}",
+                )
+            ]
+        else:
+            decade_selection = []
 
     with right:
         st.markdown("#### Temperature guide")
         for label, desc in TEMPERATURE_DESCRIPTIONS.items():
+            if label == "Any":
+                continue  # don't show "Any" in the guide since it's not an option
             style = "font-weight:700;color:#C0392B;" if label == temperature else "color:#555;"
             st.markdown(
                 f"<p style='font-size:0.85rem;margin:0.4rem 0;'>"
@@ -941,7 +1365,7 @@ def step_discovery():
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
-            _go(5)
+            _go(6)
     with col_next:
         filters_changed = (
             temperature != st.session_state.temperature or
@@ -955,14 +1379,14 @@ def step_discovery():
             if filters_changed:
                 st.session_state.anchor_pool_raw    = None
                 st.session_state.anchor_pool_tracks = None
-            _go(7)
+            _go(8)
 
 # ─────────────────────────────────────────────────────────────
 #  Step 7 — Anchor Pool (checkbox-based)
 # ─────────────────────────────────────────────────────────────
 
 def step_anchor_pool():
-    st.subheader("Step 7 — Anchor Pool")
+    st.subheader("Step 8 — Anchor Pool")
     temperature = st.session_state.temperature
     genre       = st.session_state.genre
     decade      = st.session_state.decade
@@ -987,7 +1411,7 @@ def step_anchor_pool():
         if not index:
             st.error(f"No track index found for profile **{st.session_state.project}**.")
             if st.button("← Back"):
-                _go(6)
+                _go(7)
             return
 
         filtered = _filter_index(
@@ -1020,7 +1444,7 @@ def step_anchor_pool():
             "Go back and try broadening Temperature, Genre, or Decade."
         )
         if st.button("← Adjust filters"):
-            _go(6)
+            _go(7)
         return
 
     # Metrics
@@ -1048,11 +1472,11 @@ def step_anchor_pool():
         c0, c1, c2, c3, c4, c5 = st.columns([0.4, 2.2, 2.8, 0.7, 1.4, 1.2])
         with c0:
             st.checkbox("", key=f"anchor_sel_{i}", label_visibility="collapsed")
-        c1.markdown(f"<small>{t['artist']}</small>",         unsafe_allow_html=True)
-        c2.markdown(f"<small>{t['track']}</small>",          unsafe_allow_html=True)
-        c3.markdown(f"<small>{t['plays']}</small>",          unsafe_allow_html=True)
-        c4.markdown(f"<small>{t['genre']}</small>",          unsafe_allow_html=True)
-        c5.markdown(f"<small>{t.get('decade','—')}</small>", unsafe_allow_html=True)
+        c1.markdown(f"<small>{_fix_text(t['artist'])}</small>", unsafe_allow_html=True)
+        c2.markdown(f"<small>{_fix_text(t['track'])}</small>",  unsafe_allow_html=True)
+        c3.markdown(f"<small>{t['plays']}</small>",              unsafe_allow_html=True)
+        c4.markdown(f"<small>{t['genre']}</small>",              unsafe_allow_html=True)
+        c5.markdown(f"<small>{t.get('decade','—')}</small>",     unsafe_allow_html=True)
 
     st.markdown(f"<small>*{n_checked} of {len(raw)} tracks selected*</small>",
                 unsafe_allow_html=True)
@@ -1061,7 +1485,7 @@ def step_anchor_pool():
     col_back, col_adj, col_next = st.columns([1, 1, 2])
     with col_back:
         if st.button("← Back"):
-            _go(6)
+            _go(7)
     with col_adj:
         if st.button("Reset selections"):
             for i in range(len(raw)):
@@ -1073,14 +1497,14 @@ def step_anchor_pool():
             selected = [raw[i] for i in range(len(raw))
                         if st.session_state.get(f"anchor_sel_{i}", True)]
             st.session_state.anchor_pool_tracks = selected
-            _go(8)
+            _go(9)
 
 # ─────────────────────────────────────────────────────────────
 #  Step 8 — Review & Generate
 # ─────────────────────────────────────────────────────────────
 
 def step_run():
-    st.subheader("Step 8 — Review & Generate")
+    st.subheader("Step 9 — Review & Generate")
 
     p      = st.session_state.params
     state  = st.session_state.state_obj or ProjectState()
@@ -1130,7 +1554,7 @@ def step_run():
     col_back, _, col_run = st.columns([1, 1, 2])
     with col_back:
         if st.button("← Back"):
-            _go(7)
+            _go(8)
     with col_run:
         if st.button("🎵  Generate Recommendations", type="primary",
                      disabled=not api_key or not pool, use_container_width=True):
@@ -1200,11 +1624,11 @@ def _execute_run(pool, state, p, api_key):
     else:
         st.error(
             "**No listening history found.** "
-            "Please go back to Step 2 and upload your Last.fm or Spotify CSV, "
+            "Please go back to Step 3 and upload your Last.fm or Spotify CSV, "
             "or choose the demo mode option."
         )
-        if st.button("← Back to Step 2"):
-            _go(2)
+        if st.button("← Back to Step 3"):
+            _go(3)
         return
 
     # Build AnchorPool — tracks come from the pre-indexed JSON filter,
@@ -1334,7 +1758,7 @@ def _show_results(result: RecommendationResult):
             st.markdown(_sp_logo, unsafe_allow_html=True)
         if st.button("Send to Spotify →", type="primary", use_container_width=True):
             st.session_state["_export_recs_override"] = selected_recs
-            _go(9)
+            _go(10)
         st.markdown("")
         detail_csv = _recs_to_detail_csv(selected_recs)
         st.download_button("⬇  Full Detail CSV", data=detail_csv,
@@ -1346,7 +1770,7 @@ def _show_results(result: RecommendationResult):
             st.session_state.anchor_pool_raw    = None
             st.session_state.anchor_pool_tracks = None
             st.session_state.pop("_export_recs_override", None)
-            _go(6)
+            _go(7)
 
     with export_right:
         _sz_logo = _logo_img(LOGO_SOUNDIIZ, "120px")
@@ -1383,7 +1807,7 @@ def _show_results(result: RecommendationResult):
 def step_export():
     from datetime import date
 
-    st.subheader("Step 9 — Export Your Playlist")
+    st.subheader("Step 10 — Export Your Playlist")
 
     # Surface any Spotify auth error immediately — shown before any other content
     # so it's visible even if result is None after the OAuth redirect.
@@ -1402,7 +1826,7 @@ def step_export():
     if not result:
         st.warning("No recommendations found. Please run the generator first.")
         if st.button("← Back to Run"):
-            _go(8)
+            _go(9)
         return
 
     recs = st.session_state.get("_export_recs_override") or result.recommendations
@@ -1455,7 +1879,7 @@ def step_export():
             value=f"Generated by Music Discovery Agent · {temperature} · {len(recs)} tracks",
             max_chars=300,
         )
-        public = st.checkbox("Make playlist public", value=True)
+        public = st.checkbox("Make playlist public", value=False)
         st.markdown("")
         if st.button(f"Create playlist with {len(recs)} tracks →", type="primary",
                      use_container_width=True, disabled=not playlist_name.strip()):
@@ -1515,7 +1939,7 @@ def step_export():
 
     st.markdown("")
     if st.button("← Back to results"):
-        _go(8)
+        _go(9)
 
 # ─────────────────────────────────────────────────────────────
 #  Sidebar
@@ -1570,12 +1994,13 @@ if st.session_state.get("show_product_design"):
 else:
     _progress_bar()
     step = st.session_state.step
-    if   step == 1: step_overview()
-    elif step == 2: step_history()
-    elif step == 3: step_profile()
-    elif step == 4: step_parameters()
-    elif step == 5: step_blacklist()
-    elif step == 6: step_discovery()
-    elif step == 7: step_anchor_pool()
-    elif step == 8: step_run()
-    elif step == 9: step_export()
+    if   step == 1:  step_overview()
+    elif step == 2:  step_jumpoff()
+    elif step == 3:  step_history()
+    elif step == 4:  step_profile()
+    elif step == 5:  step_parameters()
+    elif step == 6:  step_blacklist()
+    elif step == 7:  step_discovery()
+    elif step == 8:  step_anchor_pool()
+    elif step == 9:  step_run()
+    elif step == 10: step_export()
