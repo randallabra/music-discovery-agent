@@ -718,8 +718,8 @@ def step_overview():
       continuously.</p>
       <p>For the tens of thousands of tracks not yet tagged with acoustic measurement,
       the system estimates their best classification with artist, album and recording tags
-      drawn from sources like <b>Last.fm</b>, <b>MusicBrainz</b>, and <b>Discogs</b>.
-      Lastly, as people use this experience and share their listening history, the index
+      drawn from sources like <b>Last.fm</b>, <b>MusicBrainz</b>, and <b>Discogs</b>.</p>
+      <p>Lastly, as people use this experience and share their listening history, the index
       of songs that have been classified will get bigger, and the classification itself
       will get stronger.</p>
 
