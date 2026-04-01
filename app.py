@@ -37,7 +37,6 @@ TEMPERATURE_OPTIONS = [
     "Aggressive",
     "Acoustic",
     "Roots & Americana",
-    "Party",
     "Sad",
     "Rock",
     "Instrumental",
@@ -48,7 +47,6 @@ TEMPERATURE_POCKET_MAP = {
     "Aggressive":        "aggressive",
     "Acoustic":          "acoustic",
     "Roots & Americana": "acoustic_raw",
-    "Party":             "party",
     "Sad":               "sad",
     "Rock":              "rock",
     "Instrumental":      "instrumental",
@@ -60,7 +58,6 @@ TEMPERATURE_DESCRIPTIONS = {
     "Aggressive":        "High-energy, intense, abrasive. Metal, punk, grunge, industrial, hardcore.",
     "Acoustic":          "Acoustic-instrument forward. Folk, fingerpicking, singer-songwriter, unplugged arrangements.",
     "Roots & Americana": "Cultural roots tradition. Blues, Americana, country, gospel, bluegrass, old-time. Defined by genre lineage, not emotional register.",
-    "Party":             "Danceable and high-tempo. Groove, funk, dance, club. High energy meets high valence.",
     "Sad":               "Emotionally heavy, melancholic. Sadness is the dominant mood regardless of sonic texture.",
     "Rock":              "Classic, alternative, indie, and post-punk rock. Vocal-forward, mid-energy.",
     "Instrumental":      "Primarily instrumental. Post-rock, jazz, ambient rock, high-tempo without prominent vocals.",
@@ -77,6 +74,7 @@ GENRE_OPTIONS = [
     "Post-Punk",
     "Blues Rock",
     "Hard Rock",
+    "Hip Hop",
     "Indie Pop",
     "Garage Rock",
     "Glam Rock",
@@ -157,6 +155,34 @@ def _init():
             st.session_state[k] = v
 
 _init()
+
+# ─────────────────────────────────────────────────────────────
+#  Global CSS (Gill Sans Light, active-text colour fixes)
+# ─────────────────────────────────────────────────────────────
+
+st.markdown("""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;700&display=swap');
+  html, body, [class*="css"], .stMarkdown, .stTextInput, .stSelectbox,
+  .stRadio, .stCheckbox, .stNumberInput, .stTextArea, .stButton,
+  .stMetric, .stDataFrame, .stCaption, .stInfo, .stSuccess,
+  .stWarning, .stError, .stExpander, .stTabs, .stSidebar {
+    font-family: 'Gill Sans', 'Gill Sans MT', 'GillSans-Light', Calibri,
+                 'Nunito', 'Trebuchet MS', sans-serif !important;
+    font-weight: 300 !important;
+  }
+  h1, h2, h3, h4, h5, h6,
+  .stMarkdown h1, .stMarkdown h2, .stMarkdown h3,
+  .stMarkdown h4, .stMarkdown strong, b {
+    font-family: 'Gill Sans', 'Gill Sans MT', Calibri, 'Nunito', sans-serif !important;
+    font-weight: 600 !important;
+  }
+  /* Remove Streamlit default grey on captions — only grey when explicitly set */
+  .stCaption p { color: #444 !important; font-weight: 300 !important; }
+  /* Progress bar step labels */
+  div[data-testid="stMarkdownContainer"] small { font-weight: 300 !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 #  Track index loader
@@ -513,6 +539,13 @@ def _go(step: int):
     st.session_state.step = step
     st.rerun()
 
+def _reset_run():
+    """Clear recommendation result + anchor pool — call whenever navigating backward past the pool."""
+    st.session_state.result             = None
+    st.session_state.anchor_pool_raw    = None
+    st.session_state.anchor_pool_tracks = None
+    st.session_state.pop("_export_recs_override", None)
+
 def _state_dir() -> Path:
     return AGENT_DIR
 
@@ -678,16 +711,17 @@ def step_overview():
 
       <h4>How songs are understood</h4>
       <p>Temperature classification is grounded in acoustic measurements from two
-      complementary sources: <b>ReccoBeats</b>, which provides the same audio feature
-      set as Spotify's API — energy, valence, danceability, acousticness, tempo, and
-      more — and <b>SoundNet</b>, which adds coverage for tracks not yet in ReccoBeats.
-      Together they cover over 11,000 songs in the catalog with direct acoustic
-      measurement, with more being added continuously.</p>
-      <p>For tracks not yet acoustically measured, the system assigns a temperature
-      by comparing their <b>genre and tag fingerprint</b> against the acoustic cluster
-      centroids — finding the musical lane whose acoustically-confirmed members share
-      the most genre DNA with the unmeasured track. Coverage and accuracy improve
-      automatically as acoustic enrichment continues in the background.</p>
+      complementary sources: <b>ReccoBeats</b> and <b>SoundNet</b>, which provide the
+      same audio feature set as Spotify's now decremented Audio Features API — energy,
+      valence, danceability, acousticness, tempo, and more. This app currently has over
+      11,000 songs logged with direct acoustic measurement, with more being added
+      continuously.</p>
+      <p>For the tens of thousands of tracks not yet tagged with acoustic measurement,
+      the system estimates their best classification with artist, album and recording tags
+      drawn from sources like <b>Last.fm</b>, <b>MusicBrainz</b>, and <b>Discogs</b>.
+      Lastly, as people use this experience and share their listening history, the index
+      of songs that have been classified will get bigger, and the classification itself
+      will get stronger.</p>
 
       <h4>Decision Science</h4>
       <div class="score"><span class="badge">TGE 45%</span>
@@ -718,10 +752,17 @@ def step_overview():
     </div>
     """
 
+    # ── Get Started button at very top ──────────────────────────
+    _gs_spacer, _gs_col, _ = st.columns([57, 43, 1])
+    with _gs_col:
+        if st.button("Get started  →", type="primary", key="overview_start",
+                     use_container_width=True):
+            _go(2)
+
     st.markdown(f"""
     <style>
-      section.main .block-container {{ padding-top:1rem !important; padding-bottom:0 !important; }}
-      .ov-wrap {{ display:flex; width:100%; min-height:88vh; gap:0; }}
+      section.main .block-container {{ padding-top:0.5rem !important; padding-bottom:0 !important; }}
+      .ov-wrap {{ display:flex; width:100%; min-height:82vh; gap:0; }}
       .ov-left {{ flex:0 0 57%; max-width:57%; position:sticky; top:70px;
                   height:calc(100vh - 80px); display:flex; align-items:center;
                   justify-content:center; overflow:hidden; padding:1rem; box-sizing:border-box; }}
@@ -739,13 +780,11 @@ def step_overview():
     </div>
     """, unsafe_allow_html=True)
 
-    # Two buttons positioned under the right-hand description panel
-    _, bc1, bc2, _ = st.columns([57, 18, 22, 3])
-    with bc1:
-        if st.button("Get started  →", type="primary", key="overview_start"):
-            _go(2)
-    with bc2:
-        if st.button("See Product Design  →", key="overview_design"):
+    # ── See Product Design button at the bottom, full-width of right column ──
+    _pd_spacer, _pd_col, _ = st.columns([57, 43, 1])
+    with _pd_col:
+        if st.button("See Product Design  →", key="overview_design",
+                     use_container_width=True):
             st.session_state.show_product_design = True
             st.rerun()
 
@@ -757,8 +796,11 @@ def step_product_design():
     import base64 as _b64
 
     st.title("Product Design")
-    st.caption(
-        "Three-stage pipeline: Data Intelligence  →  Anchor Pool  →  Playlist Recommendation"
+    st.markdown(
+        "**Three-stage pipeline: Data Intelligence → Anchor Pool → Playlist Recommendation**"
+    )
+    st.markdown(
+        "Click any flowchart. When you hover over each, you'll see the full screen icon to expand."
     )
     st.markdown("---")
 
@@ -1297,12 +1339,12 @@ def step_discovery():
         if not _genre_all:
             _genre_opts = GENRE_OPTIONS[1:]   # exclude "Any"
             _gcols = st.columns(3)
-            # Default all to checked when first unchecking "All" (saved_genres empty)
+            # Start all unchecked — user builds their own filter from scratch
             genre_selection = [
                 g for i, g in enumerate(_genre_opts)
                 if _gcols[i % 3].checkbox(
                     g,
-                    value=(_genre_all_default or g in _saved_genres),
+                    value=(g in _saved_genres),
                     key=f"genre_cb_{g}",
                 )
             ]
@@ -1318,11 +1360,12 @@ def step_discovery():
         if not _decade_all:
             _decade_opts = DECADE_OPTIONS[1:]  # exclude "Any"
             _dcols = st.columns(4)
+            # Start all unchecked — user builds their own filter from scratch
             decade_selection = [
                 d for i, d in enumerate(_decade_opts)
                 if _dcols[i % 4].checkbox(
                     d,
-                    value=(_decade_all_default or d in _saved_decades),
+                    value=(d in _saved_decades),
                     key=f"decade_cb_{d}",
                 )
             ]
@@ -1365,6 +1408,7 @@ def step_discovery():
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
+            _reset_run()
             _go(6)
     with col_next:
         filters_changed = (
@@ -1377,8 +1421,7 @@ def step_discovery():
             st.session_state.genre       = genre_selection
             st.session_state.decade      = decade_selection
             if filters_changed:
-                st.session_state.anchor_pool_raw    = None
-                st.session_state.anchor_pool_tracks = None
+                _reset_run()
             _go(8)
 
 # ─────────────────────────────────────────────────────────────
@@ -1396,14 +1439,21 @@ def step_anchor_pool():
     filter_parts = [f"Temperature: **{temperature}**", f"Genre: **{genre_display}**"]
     if (isinstance(decade, list) and decade) or (isinstance(decade, str) and decade != "Any"):
         filter_parts.append(f"Decade: **{decade_display}**")
-    st.caption(
-        "  ·  ".join(filter_parts) + "\n\n"
-        "These tracks are your strongest taste signals. They drive adjacency scoring — "
-        "they are **not** candidates for recommendation. Uncheck any you'd like to remove."
+    st.markdown("  ·  ".join(filter_parts))
+    st.markdown(
+        "These tracks are your strongest taste signals within your prescribed musical lanes. "
+        "They'll drive adjacency scoring and ultimately inspire the songs that are recommended. "
+        "Uncheck any you'd like to remove, if they don't quite describe the vibe you're going for."
     )
 
     state: ProjectState = st.session_state.state_obj or ProjectState()
     p = st.session_state.params
+
+    # Apply reset flag BEFORE widgets are instantiated to avoid StreamlitAPIException
+    if st.session_state.pop("_anchor_reset_flag", False):
+        _raw_for_reset = st.session_state.anchor_pool_raw or []
+        for _i in range(len(_raw_for_reset)):
+            st.session_state[f"anchor_sel_{_i}"] = True
 
     # Build pool if not cached
     if st.session_state.anchor_pool_raw is None:
@@ -1485,18 +1535,19 @@ def step_anchor_pool():
     col_back, col_adj, col_next = st.columns([1, 1, 2])
     with col_back:
         if st.button("← Back"):
+            _reset_run()
             _go(7)
     with col_adj:
         if st.button("Reset selections"):
-            for i in range(len(raw)):
-                st.session_state[f"anchor_sel_{i}"] = True
+            st.session_state["_anchor_reset_flag"] = True
             st.rerun()
     with col_next:
         if st.button("Looks good  →  Review & Run", type="primary", disabled=(n_checked == 0)):
-            # Persist the user's selected tracks
             selected = [raw[i] for i in range(len(raw))
                         if st.session_state.get(f"anchor_sel_{i}", True)]
             st.session_state.anchor_pool_tracks = selected
+            st.session_state.result = None   # always start a fresh run
+            st.session_state.pop("_export_recs_override", None)
             _go(9)
 
 # ─────────────────────────────────────────────────────────────
@@ -1554,6 +1605,7 @@ def step_run():
     col_back, _, col_run = st.columns([1, 1, 2])
     with col_back:
         if st.button("← Back"):
+            _reset_run()
             _go(8)
     with col_run:
         if st.button("🎵  Generate Recommendations", type="primary",
@@ -1872,7 +1924,9 @@ def step_export():
         display = user.get("display_name") or user.get("id") or "Spotify User"
         st.success(f"✓ Connected as **{display}**")
         st.markdown("")
-        default_name = f"Music Discovery — {temperature} — {date.today().strftime('%b %Y')}"
+        _jumpoff_mode = st.session_state.get("jumpoff_mode", "A")
+        _temp_label   = temperature if _jumpoff_mode != "B" else "Playlist Discovery"
+        default_name  = f"AI Music Discovery — {_temp_label} — {date.today().strftime('%m%d%Y')}"
         playlist_name = st.text_input("Playlist name", value=default_name, max_chars=100)
         playlist_desc = st.text_input(
             "Description *(optional)*",
