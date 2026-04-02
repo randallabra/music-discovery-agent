@@ -184,15 +184,17 @@ st.markdown("""
   .stCaption p { color: #444 !important; font-weight: 300 !important; }
   /* Progress bar step labels */
   div[data-testid="stMarkdownContainer"] small { font-weight: 300 !important; }
-  /* Blue "See Product Design" button */
-  div[data-testid="stButton"] button[kind="secondary"][data-key="overview_design"] {
+  /* Blue buttons — multiple selectors for cross-version Streamlit compatibility */
+  [data-testid="baseButton-secondary"],
+  button[kind="secondary"] {
     background-color: #1565C0 !important;
     color: #fff !important;
     border: none !important;
   }
-  /* Blue "Back to Overview" button on Product Design page */
-  div[data-testid="stButton"] button[kind="secondary"][data-key="design_back"] {
-    background-color: #1565C0 !important;
+  /* Keep primary buttons red (override above for primaries) */
+  [data-testid="baseButton-primary"],
+  button[kind="primary"] {
+    background-color: #C0392B !important;
     color: #fff !important;
     border: none !important;
   }
@@ -1359,25 +1361,21 @@ def step_blacklist():
     state: ProjectState = st.session_state.state_obj or ProjectState()
     left, right = st.columns(2, gap="large")
     with left:
-        raw = st.text_area(
-            "Artists to exclude",
-            value=st.session_state.get("_blacklist_input_val", ""),
-            height=220,
-            placeholder="The Beatles, Bob Dylan, Fleetwood Mac",
-            label_visibility="collapsed",
-            key="blacklist_textarea",
-        )
-        if st.button("Submit →", key="blacklist_submit", use_container_width=True):
-            _pending = st.session_state.get("blacklist_textarea", "")
-            if _pending.strip():
-                additions = [a.strip() for line in _pending.replace(",","\n").splitlines()
-                             if (a := line.strip())]
-                if additions:
-                    state.add_to_blacklist(additions)
-                    st.session_state.state_obj = state
-            # Clear the input field
-            st.session_state["_blacklist_input_val"] = ""
-            st.session_state["blacklist_textarea"]   = ""
+        # Use a form so clear_on_submit handles resetting the textarea safely
+        with st.form("blacklist_add_form", clear_on_submit=True):
+            raw = st.text_area(
+                "Artists to exclude",
+                height=220,
+                placeholder="The Beatles, Bob Dylan, Fleetwood Mac",
+                label_visibility="collapsed",
+            )
+            submitted = st.form_submit_button("Submit →", use_container_width=True)
+        if submitted and raw.strip():
+            additions = [a.strip() for line in raw.replace(",", "\n").splitlines()
+                         if (a := line.strip())]
+            if additions:
+                state.add_to_blacklist(additions)
+                st.session_state.state_obj = state
             st.rerun()
     with right:
         existing = sorted(state.blacklist)

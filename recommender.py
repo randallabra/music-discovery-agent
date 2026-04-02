@@ -443,8 +443,9 @@ def get_recommendations(
     state: ProjectState,
     client: Optional[anthropic.Anthropic] = None,
 ) -> RecommendationResult:
-    # Overshoot: ask Claude for more tracks than needed so filtering leaves enough
-    overshoot = int(config.batch_size * 1.6)
+    # Overshoot: ask Claude for more tracks than needed so filtering leaves enough.
+    # 2.5x accounts for large known_tracks sets (46k+ tracks) eating into the pool.
+    overshoot = int(config.batch_size * 2.5)
     overshoot_config = dataclasses.replace(config, batch_size=overshoot)
 
     print(f"Calling Claude ({config.model}) for lane: {config.lane} (requesting {overshoot} for overshoot)...")
