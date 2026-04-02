@@ -414,12 +414,11 @@ def filter_against_state(
       1. Collision memory (previously recommended tracks)
       2. Blacklist (explicitly excluded artists)
       3. known_tracks (artist + title) — fuzzy normalised match
-      4. known_titles (title only, any artist) — blocks covers:
-         if "Song to the Siren" is known via This Mortal Coil,
-         the Tim Buckley original is also blocked.
+    Note: title-only filtering (known_titles) was removed — for large libraries
+    (46k+ tracks) it was too aggressive, blocking legitimate new songs whose
+    titles happened to appear under a different artist in the history.
     """
     known_normalised = _make_known_set(known_tracks)
-    known_titles_normalised = {_normalise(t) for t in known_titles}
     filtered = []
     for r in recs:
         if state.is_blacklisted(r.artist):
@@ -429,8 +428,6 @@ def filter_against_state(
         norm_key = (_normalise(r.artist), _normalise(r.track))
         if norm_key in known_normalised:
             continue
-        if _normalise(r.track) in known_titles_normalised:
-            continue   # title known under a different artist — cover blocked
         filtered.append(r)
     return filtered
 

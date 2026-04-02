@@ -1381,22 +1381,23 @@ def step_blacklist():
         existing = sorted(state.blacklist)
         if existing:
             st.markdown(f"**Currently blacklisted — {len(existing)} artists**")
+            # Key rotates on each removal so the radio resets without touching widget state
+            _bl_gen = st.session_state.get("_bl_remove_gen", 0)
             _to_remove = st.radio(
                 "Select to remove",
                 options=existing,
                 index=None,
                 label_visibility="collapsed",
-                key="blacklist_remove_radio",
+                key=f"blacklist_remove_radio_{_bl_gen}",
             )
             if _to_remove:
                 if st.button(f'Remove "{_to_remove}"', key="blacklist_remove_btn",
                              use_container_width=True):
                     state.blacklist.discard(_to_remove)
                     st.session_state.state_obj = state
-                    # Persist the removal immediately
                     _proj = st.session_state.get("project") or "default"
                     save_state(state, _state_file(_proj))
-                    st.session_state["blacklist_remove_radio"] = None
+                    st.session_state["_bl_remove_gen"] = _bl_gen + 1
                     st.rerun()
         else:
             st.markdown("**Currently blacklisted**")
@@ -1750,7 +1751,7 @@ def step_run():
                      disabled=not api_key or not pool, use_container_width=True):
             _execute_run(pool, state, p, api_key)
         st.markdown(
-            "<small style='color:#555;'>⏱ Generation typically takes about 60 seconds.</small>",
+            "<small style='color:#111;'>⏱ Generation typically takes about 60 seconds.</small>",
             unsafe_allow_html=True,
         )
 
