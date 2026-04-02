@@ -177,10 +177,35 @@ st.markdown("""
     font-family: 'Gill Sans', 'Gill Sans MT', Calibri, 'Nunito', sans-serif !important;
     font-weight: 600 !important;
   }
+  /* Body text under 14px — bump to weight 400 for readability */
+  .stMarkdown p, .stMarkdown li, .stMarkdown span,
+  div[data-testid="stMarkdownContainer"] p { font-weight: 400 !important; }
   /* Remove Streamlit default grey on captions — only grey when explicitly set */
   .stCaption p { color: #444 !important; font-weight: 300 !important; }
   /* Progress bar step labels */
   div[data-testid="stMarkdownContainer"] small { font-weight: 300 !important; }
+  /* Blue "See Product Design" button */
+  div[data-testid="stButton"] button[kind="secondary"][data-key="overview_design"] {
+    background-color: #1565C0 !important;
+    color: #fff !important;
+    border: none !important;
+  }
+  /* Blue "Back to Overview" button on Product Design page */
+  div[data-testid="stButton"] button[kind="secondary"][data-key="design_back"] {
+    background-color: #1565C0 !important;
+    color: #fff !important;
+    border: none !important;
+  }
+  /* Amber advisory notices (replaces blue info for calibration warnings) */
+  .amber-notice {
+    background-color: #FFF8E1;
+    border-left: 4px solid #F9A825;
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    margin-bottom: 0.75rem;
+    font-size: 0.88rem;
+    color: #333;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -284,9 +309,7 @@ def _filter_index(
         if artist in blacklist:
             continue
         # Utility purge
-        if any(w in artist.lower() for w in
-               ("white noise","sleep","binaural","meditation","rain sounds",
-                "nature sounds","baby sleep","lullaby machine")):
+        if any(w in artist.lower() for w in _UTILITY_WORDS):
             continue
         if pocket_filter:
             # "pockets" is a list field (v4); "pocket" is the legacy scalar field
@@ -781,6 +804,18 @@ def step_overview():
     """, unsafe_allow_html=True)
 
     # ── See Product Design button at the bottom, full-width of right column ──
+    # Inject blue styling scoped to this step — targets the secondary button
+    # in the bottom row (only rendered on step 1, so no bleed to other steps)
+    st.markdown("""
+    <style>
+      div[data-testid="stHorizontalBlock"]:last-of-type
+        div[data-testid="column"]:nth-child(2)
+        div[data-testid="stButton"] button {
+          background-color: #1565C0 !important;
+          color: #fff !important;
+          border: none !important;
+      }
+    </style>""", unsafe_allow_html=True)
     _pd_spacer, _pd_col, _ = st.columns([57, 43, 1])
     with _pd_col:
         if st.button("See Product Design  →", key="overview_design",
@@ -795,36 +830,74 @@ def step_overview():
 def step_product_design():
     import base64 as _b64
 
-    st.title("Product Design")
-    st.markdown(
-        "**Three-stage pipeline: Data Intelligence → Anchor Pool → Playlist Recommendation**"
-    )
-    st.markdown(
-        "Click any flowchart. When you hover over each, you'll see the full screen icon to expand."
-    )
-    st.markdown("---")
-
+    # ── Custom fullscreen view ──────────────────────────────────
+    _fs = st.session_state.get("_fullscreen_chart")
     chart_files = [
         CHARTS_DIR / "chart1_data_intelligence.png",
         CHARTS_DIR / "chart2_anchor_pool.png",
         CHARTS_DIR / "chart3_playlist_recommendation.png",
     ]
     chart_labels = [
-        "1.  Building Data Intelligence",
-        "2.  Building the Anchor Pool",
-        "3.  Creating Playlist Recommendations",
+        "Building Data Intelligence",
+        "Building the Anchor Pool",
+        "Creating Playlist Recommendations",
     ]
 
+    if _fs is not None and 0 <= _fs < len(chart_files):
+        # Fullscreen mode — show chart large with prominent back button
+        st.markdown("""
+        <style>
+          .fs-back-btn button { font-size:1rem !important; font-weight:700 !important;
+            background-color:#1565C0 !important; color:#fff !important;
+            border:none !important; padding:0.5rem 1.4rem !important; }
+        </style>""", unsafe_allow_html=True)
+        with st.container():
+            st.markdown('<div class="fs-back-btn">', unsafe_allow_html=True)
+            if st.button("← Back to Product Design", key="fs_back_btn"):
+                del st.session_state["_fullscreen_chart"]
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f"### {chart_labels[_fs]}")
+        path = chart_files[_fs]
+        if path.exists():
+            st.image(str(path), use_container_width=True)
+        else:
+            st.warning(f"Chart not found: `{path.name}`")
+        return
+
+    st.title("Product Design")
+    st.markdown(
+        "**Three-stage pipeline: Data Intelligence → Anchor Pool → Playlist Recommendation**"
+    )
+    st.markdown(
+        "Click **Expand** under any chart to view it full-screen."
+    )
+    st.markdown("---")
+
     cols = st.columns(3, gap="medium")
-    for col, path, label in zip(cols, chart_files, chart_labels):
+    for idx, (col, path, label) in enumerate(zip(cols, chart_files, chart_labels)):
         with col:
             st.markdown(f"**{label}**")
             if path.exists():
                 st.image(str(path), use_container_width=True)
+                if st.button("⛶ Expand", key=f"expand_chart_{idx}",
+                             use_container_width=True):
+                    st.session_state["_fullscreen_chart"] = idx
+                    st.rerun()
             else:
                 st.warning(f"Chart not found: `{path.name}`")
 
     st.markdown("---")
+    # Blue Back button, red Get started
+    st.markdown("""
+    <style>
+      div[data-testid="stHorizontalBlock"]:last-of-type
+        div[data-testid="column"]:nth-child(1)
+        div[data-testid="stButton"] button {
+          background-color: #1565C0 !important;
+          color: #fff !important; border: none !important;
+      }
+    </style>""", unsafe_allow_html=True)
     btn_back, _, btn_start = st.columns([2, 6, 2])
     with btn_back:
         if st.button("← Back to Overview", key="design_back"):
@@ -842,7 +915,7 @@ def step_product_design():
 
 def step_jumpoff():
     st.title("Music Discovery Agent")
-    st.subheader("Step 2 — Choose Your Starting Point")
+    st.subheader("Choose Your Starting Point")
     st.markdown("")
 
     mode = st.radio(
@@ -873,6 +946,21 @@ def step_jumpoff():
             accept_multiple_files=True,
             key="playlist_screenshots",
         )
+
+        # Sample images — show Apple Music and Spotify examples side by side
+        _sample_apple   = ASSETS_DIR / "Apple Music Playlist Sample.png"
+        _sample_spotify = ASSETS_DIR / "Spotify Playlist Sample.png"
+        if _sample_apple.exists() or _sample_spotify.exists():
+            st.markdown("**Sample — what a playlist screenshot looks like:**")
+            _scol1, _scol2 = st.columns(2, gap="medium")
+            with _scol1:
+                if _sample_apple.exists():
+                    st.markdown("<small>Apple Music</small>", unsafe_allow_html=True)
+                    st.image(str(_sample_apple), use_container_width=True)
+            with _scol2:
+                if _sample_spotify.exists():
+                    st.markdown("<small>Spotify</small>", unsafe_allow_html=True)
+                    st.image(str(_sample_spotify), use_container_width=True)
 
         if uploaded_imgs:
             st.success(f"✓  {len(uploaded_imgs)} image{'s' if len(uploaded_imgs) > 1 else ''} uploaded")
@@ -951,7 +1039,7 @@ def step_jumpoff():
         if st.button("← Back"):
             _go(1)
     with col_next:
-        if st.button("Next →", type="primary",
+        if st.button("Next → (upload history)", type="primary",
                      disabled=(mode == "B")):   # B requires parsing first
             st.session_state.jumpoff_mode = mode
             _go(3)   # continue to Listening History
@@ -963,7 +1051,7 @@ def step_jumpoff():
 
 def step_history():
     st.title("Music Discovery Agent")
-    st.subheader("Step 3 — Listening History")
+    st.subheader("Listening History")
 
     project = st.session_state.get("project","")
     if project:
@@ -977,55 +1065,22 @@ def step_history():
                 "candidates and avoid suggesting tracks you've already heard."
             )
 
-    st.caption(
+    # Instruction text in black (not muted caption)
+    st.markdown(
+        "<p style='color:#111;font-size:0.9rem;margin:0.4rem 0 1rem 0;'>"
         "Upload your full listening history CSV. "
         "The anchor pool is drawn from your pre-indexed data; "
         "this CSV powers the recommendation candidate scoring."
+        "</p>",
+        unsafe_allow_html=True,
     )
 
-    # ── Check for Last.fm API key ─────────────────────────────────────────────
-    _lfm_api_key = ""
-    try:
-        _lfm_api_key = st.secrets.get("LASTFM_API_KEY", "") or ""
-    except Exception:
-        pass
-
+    # ── Two-column upload layout — Last.fm | Spotify ──────────────────────────
     left, mid, right = st.columns([10, 0.08, 10], gap="small")
     with left:
         st.markdown("#### Last.fm")
-
-        # Username input — fetch directly via API if key is configured
-        _lfm_username = st.text_input(
-            "Last.fm username",
-            placeholder="e.g.  marlonrando",
-            key="lastfm_username_input",
-        )
-        if _lfm_username.strip():
-            if _lfm_api_key:
-                if st.button("Fetch history from Last.fm →", key="lastfm_fetch_btn",
-                             use_container_width=True):
-                    with st.spinner(f"Fetching scrobbles for {_lfm_username.strip()}…"):
-                        try:
-                            _lfm_tracks = _fetch_lastfm_history(_lfm_username.strip(), max_tracks=3000)
-                            _lfm_csv    = _lastfm_tracks_to_csv_bytes(_lfm_tracks)
-                            st.session_state["_lastfm_fetched_csv"]  = _lfm_csv
-                            st.session_state["_lastfm_fetched_name"] = (
-                                f"{_lfm_username.strip()}_history.csv"
-                            )
-                            st.success(f"✓  Fetched {len(_lfm_tracks):,} scrobbles")
-                        except Exception as _e:
-                            st.error(f"Could not fetch Last.fm history: {_e}")
-            else:
-                st.caption("_(LASTFM_API_KEY not set in secrets.toml — add it to enable direct fetch)_")
-
-        _fetched_csv  = st.session_state.get("_lastfm_fetched_csv")
-        _fetched_name = st.session_state.get("_lastfm_fetched_name", "lastfm_history.csv")
-        if _fetched_csv:
-            st.success(f"✓  Using fetched Last.fm history: {_fetched_name}")
-
-        st.markdown("")
         st.markdown(
-            "Or export your complete lifetime history at "
+            "Export your complete lifetime history at "
             "[lastfm.ghan.nl/export](https://lastfm.ghan.nl/export/)\n\n"
             "⏱ Usually ready in under a minute"
         )
@@ -1034,13 +1089,10 @@ def step_history():
             st.success(f"✓  {lastfm_file.name}  ({lastfm_file.size:,} bytes)")
 
     with mid:
-        st.markdown("<div style='border-left:1px solid #333;height:480px;'></div>",
+        st.markdown("<div style='border-left:1px solid #333;height:260px;'></div>",
                     unsafe_allow_html=True)
     with right:
         st.markdown("#### Spotify")
-        st.markdown("")   # vertical spacer to align with Last.fm username input + fetch button
-        st.markdown("")
-        st.markdown("")
         st.markdown(
             "Request your data at "
             "[spotify.com/us/account/privacy](https://www.spotify.com/us/account/privacy/)\n\n"
@@ -1052,7 +1104,7 @@ def step_history():
 
     st.markdown("---")
 
-    # ── Demo mode ────────────────────────────────────────────────
+    # ── Data source radio — placed immediately below the divider ─────────────
     data_mode = st.radio(
         "Data source",
         options=[
@@ -1068,18 +1120,20 @@ def step_history():
     if demo_chosen:
         st.info(
             "**Demo mode** — you'll be exploring the app using the pre-indexed listening history "
-            "from **marlonrando** + **teddxn** (20,515 tracks with 3+ plays). "
+            "of 20,515 tracks with 3+ plays. "
             "All filters, Temperature, Anchor Pool, and recommendation engine work exactly "
             "as they would with your own data."
         )
 
-    _have_lastfm = bool(_fetched_csv or lastfm_file)
+    # No fetched CSV path anymore (Last.fm API removed); keep variable for compat
+    _fetched_csv  = None
+    _fetched_name = ""
+
+    _have_lastfm = bool(lastfm_file)
     uploaded = None; source = None
     if not demo_chosen:
         if _have_lastfm and spotify_file:
             st.warning("Please upload from one service at a time.")
-        elif _fetched_csv:
-            uploaded, source = "fetched", "lastfm"
         elif lastfm_file:
             uploaded, source = lastfm_file, "lastfm"
         elif spotify_file:
@@ -1092,7 +1146,7 @@ def step_history():
         if st.button("← Back"):
             _go(2)
     with col_next:
-        if st.button("Next →", type="primary", disabled=not next_enabled):
+        if st.button("Next → (build profile)", type="primary", disabled=not next_enabled):
             if demo_chosen:
                 st.session_state.demo_mode    = True
                 st.session_state.tmp_csv_path = None
@@ -1101,26 +1155,47 @@ def step_history():
                 st.session_state.project      = "marlonrando"
             else:
                 st.session_state.demo_mode = False
-                if uploaded == "fetched":
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-                    tmp.write(_fetched_csv); tmp.flush()
-                    st.session_state.tmp_csv_path = tmp.name
-                    st.session_state.csv_filename = _fetched_name
-                    st.session_state.source       = "lastfm"
-                else:
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-                    tmp.write(uploaded.read()); tmp.flush()
-                    st.session_state.tmp_csv_path = tmp.name
-                    st.session_state.csv_filename = uploaded.name
-                    st.session_state.source       = source
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+                tmp.write(uploaded.read()); tmp.flush()
+                st.session_state.tmp_csv_path = tmp.name
+                st.session_state.csv_filename = uploaded.name
+                st.session_state.source       = source
             _go(4)
 
 # ─────────────────────────────────────────────────────────────
 #  Step 3 — Profile
 # ─────────────────────────────────────────────────────────────
 
+_UTILITY_WORDS = (
+    "white noise", "sleep", "binaural", "meditation", "rain sounds",
+    "nature sounds", "baby sleep", "lullaby machine",
+)
+
+def _compute_profile_stats(index: dict) -> dict:
+    """Aggregate top-5 artists, tracks, and genres from the track index."""
+    from collections import defaultdict
+    artist_plays: dict = defaultdict(int)
+    track_list = []
+    genre_counts: dict = defaultdict(int)
+    for t in index.values():
+        artist = t.get("artist", "?")
+        # Apply the same utility purge used in _filter_index
+        if any(w in artist.lower() for w in _UTILITY_WORDS):
+            continue
+        plays  = int(t.get("plays", 0))
+        genre  = t.get("genre", "") or ""
+        artist_plays[artist] += plays
+        track_list.append((artist, t.get("track", "?"), plays))
+        if genre and genre not in ("Other", "—", ""):
+            genre_counts[genre] += 1
+    top_artists = sorted(artist_plays.items(), key=lambda x: -x[1])[:5]
+    top_tracks  = sorted(track_list, key=lambda x: -x[2])[:5]
+    top_genres  = sorted(genre_counts.items(), key=lambda x: -x[1])[:5]
+    return {"top_artists": top_artists, "top_tracks": top_tracks, "top_genres": top_genres}
+
+
 def step_profile():
-    st.subheader("Step 4 — Listener Profile")
+    st.subheader("Listener Profile")
     st.caption("The profile name maps to your pre-indexed listening data, blacklist, and session history.")
 
     left, right = st.columns([1, 1.2], gap="large")
@@ -1136,7 +1211,7 @@ def step_profile():
             if st.button("← Back"):
                 _go(3)
         with col_next:
-            if st.button("Next →", type="primary", disabled=not project):
+            if st.button("Next → (set parameters)", type="primary", disabled=not project):
                 st.session_state.project   = project
                 st.session_state.state_obj = load_state(_state_file(project))
                 _go(5)
@@ -1145,56 +1220,46 @@ def step_profile():
             idx = _load_index(project)
             sf = _state_file(project)
             if idx:
-                if sf.exists():
-                    s = load_state(sf)
+                s = load_state(sf) if sf.exists() else None
 
-                    # Count unique tracks from uploaded CSV
-                    csv_path = st.session_state.get("tmp_csv_path")
-                    unique_track_count = None
-                    if csv_path:
-                        try:
-                            import csv as _csv
-                            tracks_seen = set()
-                            with open(csv_path, encoding="utf-8", errors="replace") as f:
-                                reader = _csv.DictReader(f)
-                                for row in reader:
-                                    artist = (row.get("artist") or row.get("Artist") or "").strip().lower()
-                                    track = (row.get("track") or row.get("Track") or row.get("track_name") or "").strip().lower()
-                                    if artist and track:
-                                        tracks_seen.add((artist, track))
-                            unique_track_count = len(tracks_seen)
-                        except Exception:
-                            pass
+                # ── Top-5 stats panel ────────────────────────────────────
+                stats = _compute_profile_stats(idx)
+                _info_lines = [f"**{project}** — {len(idx):,} indexed tracks\n"]
 
-                    lines = [f"**{project}** — indexed"]
-                    if unique_track_count is not None:
-                        lines.append(f"- Total unique tracks in your upload: **{unique_track_count:,}**")
-                    lines.append(f"- Tracks in index (taste signals): **{len(idx):,}**")
-                    lines.append(f"- Previous runs: **{s.run_count}**")
-                    lines.append(f"- Tracks withheld from anchor pool (prior runs): **{len(s.collision_memory)}**")
-                    lines.append(f"- Blacklisted artists: **{len(s.blacklist)}**")
-                    st.info("\n\n".join(lines))
+                _info_lines.append("**Top 5 Artists**")
+                for artist, plays in stats["top_artists"]:
+                    _info_lines.append(f"- {_fix_text(artist)} — {plays:,} plays")
 
-                    if s.run_count > 0:
-                        st.markdown("")
-                        collision_choice = st.radio(
-                            "Prior run history",
-                            options=[
-                                "Withhold previously recommended tracks from future anchor pools and recommendations",
-                                "Do not withhold previously selected tracks from anchor pools and recommendations moving forwards",
-                            ],
-                            index=0 if not s.ignore_collision_memory else 1,
-                            key="collision_memory_choice",
-                            label_visibility="collapsed",
-                        )
-                        if collision_choice.startswith("Do not withhold"):
-                            s.ignore_collision_memory = True
-                            st.session_state.state_obj = s
-                        else:
-                            s.ignore_collision_memory = False
-                            st.session_state.state_obj = s
-                else:
-                    st.info(f"**{project}** — {len(idx):,} indexed tracks. No run history yet.")
+                _info_lines.append("\n**Top 5 Songs**")
+                for artist, track, plays in stats["top_tracks"]:
+                    _info_lines.append(f"- {_fix_text(artist)} — {_fix_text(track)} ({plays:,} plays)")
+
+                if stats["top_genres"]:
+                    _info_lines.append("\n**Top 5 Genres**")
+                    for genre, count in stats["top_genres"]:
+                        _info_lines.append(f"- {genre} ({count:,} tracks)")
+
+                if s:
+                    _info_lines.append(f"\n- Previous runs: **{s.run_count}**")
+                    _info_lines.append(
+                        f"- Collision Memory (songs from previous runs that won't be repeated): "
+                        f"**{len(s.collision_memory)}**"
+                    )
+                    _info_lines.append(f"- Blacklisted artists: **{len(s.blacklist)}**")
+
+                st.info("\n\n".join(_info_lines))
+
+                # ── Reset collision memory option ─────────────────────────
+                if s and s.run_count > 0:
+                    st.markdown("")
+                    _reset_cm = st.checkbox(
+                        "Reset collision memory — songs from previous runs are fair game "
+                        "for future playlist consideration",
+                        value=s.ignore_collision_memory,
+                        key="reset_collision_memory_cb",
+                    )
+                    s.ignore_collision_memory = _reset_cm
+                    st.session_state.state_obj = s
             else:
                 st.warning(
                     f"No index found for **{project}**. "
@@ -1207,7 +1272,7 @@ def step_profile():
 # ─────────────────────────────────────────────────────────────
 
 def step_parameters():
-    st.subheader("Step 5 — Discovery Parameters")
+    st.subheader("Discovery Parameters")
     st.info(
         "**Goal:** Recommend new songs by under-explored or new-to-you artists, "
         "driven by song-level taste adjacency — not 'similar artists.'\n\n"
@@ -1218,34 +1283,56 @@ def step_parameters():
 
     with left:
         st.markdown("**Anchor pool:** *the seed data from your listening history which will inform song recommendations*")
+        st.markdown(
+            "**Tracks in your anchor pool**\n\n"
+            "Your anchor pool will be the pre-selected set of songs which meet your taste filters "
+            "(on the next screen), to in turn shape your recommended playlists.\n\n"
+            "*min 10 · max 50*"
+        )
         anchor_size = st.number_input(
             "Tracks in your anchor pool",
-            min_value=5, max_value=100, step=5,
-            value=p["anchor_pool_size"],
-            help="These are your strongest taste signals after applying Temperature + Genre filters. Default 20.",
+            min_value=10, max_value=50, step=5,
+            value=max(10, min(50, p["anchor_pool_size"])),
+            label_visibility="collapsed",
+        )
+
+        st.markdown("")
+        st.markdown(
+            "**Min plays per track to qualify**\n\n"
+            "You want to inspire your new playlists with songs you've affirmed through behavior. "
+            "How many times should you have played a song before it's considered a signal of your tastes?\n\n"
+            "*min 3 · max 30*"
         )
         min_track_plays = st.number_input(
             "Min plays per track to qualify",
-            min_value=1, max_value=50, step=1,
-            value=p["min_track_plays"],
-            help="A track must have been played at least this many times to be considered a taste signal.",
+            min_value=3, max_value=30, step=1,
+            value=max(3, min(30, p["min_track_plays"])),
+            label_visibility="collapsed",
         )
 
     with right:
         st.markdown("**Recommendation output**")
+        st.markdown(
+            "**Tracks to recommend per batch**\n\n"
+            "How long should your recommended playlist be — how many songs would you like us to include?\n\n"
+            "*min 10 · max 50*"
+        )
         batch_size = st.number_input(
             "Tracks to recommend per batch",
-            min_value=5, max_value=100, step=5,
-            value=p["batch_size"],
-            help="Default 20. You can uncheck any tracks before pushing to Spotify.",
+            min_value=10, max_value=50, step=5,
+            value=max(10, min(50, p["batch_size"])),
+            label_visibility="collapsed",
         )
+
+    # Hard constraint validation
+    _params_valid = (10 <= anchor_size <= 50) and (3 <= min_track_plays <= 30) and (10 <= batch_size <= 50)
 
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
             _go(4)
     with col_next:
-        if st.button("Next →", type="primary"):
+        if st.button("Next → (add to blacklist)", type="primary", disabled=not _params_valid):
             st.session_state.params = {
                 **p,
                 "batch_size":        int(batch_size),
@@ -1261,7 +1348,7 @@ def step_parameters():
 # ─────────────────────────────────────────────────────────────
 
 def step_blacklist():
-    st.subheader("Step 6 — Blacklist")
+    st.subheader("Blacklist")
     st.caption(
         "Artists listed here will be excluded from your anchor pool and will never appear in recommendations. "
         "Include either artists you know inside out, or artists that fit your tastes but you know you don't like. "
@@ -1272,15 +1359,47 @@ def step_blacklist():
     state: ProjectState = st.session_state.state_obj or ProjectState()
     left, right = st.columns(2, gap="large")
     with left:
-        raw = st.text_area("Artists to exclude", height=240,
-                           placeholder="The Beatles, Bob Dylan, Fleetwood Mac",
-                           label_visibility="collapsed")
+        raw = st.text_area(
+            "Artists to exclude",
+            value=st.session_state.get("_blacklist_input_val", ""),
+            height=220,
+            placeholder="The Beatles, Bob Dylan, Fleetwood Mac",
+            label_visibility="collapsed",
+            key="blacklist_textarea",
+        )
+        if st.button("Submit →", key="blacklist_submit", use_container_width=True):
+            _pending = st.session_state.get("blacklist_textarea", "")
+            if _pending.strip():
+                additions = [a.strip() for line in _pending.replace(",","\n").splitlines()
+                             if (a := line.strip())]
+                if additions:
+                    state.add_to_blacklist(additions)
+                    st.session_state.state_obj = state
+            # Clear the input field
+            st.session_state["_blacklist_input_val"] = ""
+            st.session_state["blacklist_textarea"]   = ""
+            st.rerun()
     with right:
         existing = sorted(state.blacklist)
         if existing:
             st.markdown(f"**Currently blacklisted — {len(existing)} artists**")
-            st.dataframe({"Artist": existing}, use_container_width=True,
-                         height=220, hide_index=True)
+            _to_remove = st.radio(
+                "Select to remove",
+                options=existing,
+                index=None,
+                label_visibility="collapsed",
+                key="blacklist_remove_radio",
+            )
+            if _to_remove:
+                if st.button(f'Remove "{_to_remove}"', key="blacklist_remove_btn",
+                             use_container_width=True):
+                    state.blacklist.discard(_to_remove)
+                    st.session_state.state_obj = state
+                    # Persist the removal immediately
+                    _proj = st.session_state.get("project") or "default"
+                    save_state(state, _state_file(_proj))
+                    st.session_state["blacklist_remove_radio"] = None
+                    st.rerun()
         else:
             st.markdown("**Currently blacklisted**")
             st.caption("No artists blacklisted yet.")
@@ -1290,13 +1409,7 @@ def step_blacklist():
         if st.button("← Back"):
             _go(5)
     with col_next:
-        if st.button("Next →  (set discovery filters)", type="primary"):
-            if raw.strip():
-                additions = [a.strip() for line in raw.replace(",","\n").splitlines()
-                             if (a := line.strip())]
-                if additions:
-                    state.add_to_blacklist(additions)
-                    st.session_state.state_obj = state
+        if st.button("Next → (set musical lanes)", type="primary"):
             st.session_state.anchor_pool_raw    = None
             st.session_state.anchor_pool_tracks = None
             _go(7)
@@ -1306,13 +1419,18 @@ def step_blacklist():
 # ─────────────────────────────────────────────────────────────
 
 def step_discovery():
-    st.subheader("Step 7 — Temperature")
-    st.info(
+    st.subheader("Musical Lanes")
+
+    # Amber advisory notice — operationally important, visually distinct from goal banners
+    st.markdown(
+        "<div class='amber-notice'>"
         "We're still collecting acoustic scoring data that will make the song-to-temperature "
         "classifications even more accurate. For now, if you see songs that are populated but "
         "misclassified on the next screen, simply remove them from the anchor pool."
+        "</div>",
+        unsafe_allow_html=True,
     )
-    st.caption(
+    st.markdown(
         "Set the emotional temperature, genre, and era for this run. "
         "These filters will shape your anchor pool — the taste signals the engine builds from, "
         "and through that, the songs that are recommended back to you."
@@ -1322,14 +1440,11 @@ def step_discovery():
 
     with left:
         st.markdown("#### Temperature")
-        st.caption("The emotional register and energy level of the tracks you want to anchor from.")
         _t = st.session_state.temperature
         # Exclude "Any" from the visible temperature radio
         _temp_opts = [t for t in TEMPERATURE_OPTIONS if t != "Any"]
-        # If saved temp is "Any" or not in list, default to first option
-        if _t not in _temp_opts:
-            _t = _temp_opts[0]
-        _t_idx = _temp_opts.index(_t)
+        # Allow no default — user must choose
+        _t_idx = _temp_opts.index(_t) if _t in _temp_opts else None
         temperature = st.radio(
             "Temperature",
             options=_temp_opts,
@@ -1343,58 +1458,64 @@ def step_discovery():
         _saved_genres = st.session_state.genre if isinstance(st.session_state.genre, list) else []
         _genre_all_default = len(_saved_genres) == 0
         _genre_all = st.checkbox("All genres", value=_genre_all_default, key="genre_all_cb")
-        if not _genre_all:
-            _genre_opts = GENRE_OPTIONS[1:]   # exclude "Any"
-            _gcols = st.columns(3)
-            # Start all unchecked — user builds their own filter from scratch
-            genre_selection = [
-                g for i, g in enumerate(_genre_opts)
-                if _gcols[i % 3].checkbox(
-                    g,
-                    value=(g in _saved_genres),
-                    key=f"genre_cb_{g}",
-                )
-            ]
-        else:
-            genre_selection = []
+        # Always show individual genre options so user knows what they're opting out of
+        _genre_opts = GENRE_OPTIONS[1:]
+        _gcols = st.columns(3)
+        _genre_checked = [
+            g for i, g in enumerate(_genre_opts)
+            if _gcols[i % 3].checkbox(
+                g,
+                value=(g in _saved_genres) if not _genre_all else False,
+                key=f"genre_cb_{g}",
+                disabled=_genre_all,
+            )
+        ]
+        genre_selection = [] if _genre_all else _genre_checked
 
         st.markdown("")
-        st.markdown("#### Decade  *(~90% of catalog has year data)*")
+        st.markdown("#### Decade")
         st.caption("Uncheck specific decades to exclude them — all included by default.")
         _saved_decades = st.session_state.decade if isinstance(st.session_state.decade, list) else []
         _decade_all_default = len(_saved_decades) == 0
         _decade_all = st.checkbox("All decades", value=_decade_all_default, key="decade_all_cb")
-        if not _decade_all:
-            _decade_opts = DECADE_OPTIONS[1:]  # exclude "Any"
-            _dcols = st.columns(4)
-            # Start all unchecked — user builds their own filter from scratch
-            decade_selection = [
-                d for i, d in enumerate(_decade_opts)
-                if _dcols[i % 4].checkbox(
-                    d,
-                    value=(d in _saved_decades),
-                    key=f"decade_cb_{d}",
-                )
-            ]
-        else:
-            decade_selection = []
+        # Always show decade options
+        _decade_opts = DECADE_OPTIONS[1:]
+        _dcols = st.columns(4)
+        _decade_checked = [
+            d for i, d in enumerate(_decade_opts)
+            if _dcols[i % 4].checkbox(
+                d,
+                value=(d in _saved_decades) if not _decade_all else False,
+                key=f"decade_cb_{d}",
+                disabled=_decade_all,
+            )
+        ]
+        decade_selection = [] if _decade_all else _decade_checked
 
     with right:
         st.markdown("#### Temperature guide")
         for label, desc in TEMPERATURE_DESCRIPTIONS.items():
             if label == "Any":
-                continue  # don't show "Any" in the guide since it's not an option
-            style = "font-weight:700;color:#C0392B;" if label == temperature else "color:#555;"
-            st.markdown(
-                f"<p style='font-size:0.85rem;margin:0.4rem 0;'>"
-                f"<span style='{style}'>{label}</span>"
-                f"{'<br>' if label == temperature else ' — '}"
-                f"<span style='color:#444;font-size:0.82rem;'>{desc}</span></p>",
-                unsafe_allow_html=True,
-            )
+                continue
+            if label == temperature:
+                # Selected: entire entry in red boldface
+                st.markdown(
+                    f"<p style='font-size:0.85rem;margin:0.5rem 0;"
+                    f"font-weight:700;color:#C0392B;'>"
+                    f"<strong>{label}</strong> — {desc}</p>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                # Not selected: label bold, description in standard dark color
+                st.markdown(
+                    f"<p style='font-size:0.85rem;margin:0.5rem 0;'>"
+                    f"<strong>{label}</strong>"
+                    f" — <span style='color:#333;'>{desc}</span></p>",
+                    unsafe_allow_html=True,
+                )
 
         # Live pool size preview
-        if st.session_state.project:
+        if st.session_state.project and temperature:
             index = _load_index(st.session_state.project)
             state = st.session_state.state_obj or ProjectState()
             p = st.session_state.params
@@ -1412,18 +1533,23 @@ def step_discovery():
             else:
                 st.error(f"No tracks match this combination (out of {total_in_index:,}). Try broadening the filters.")
 
+    _temp_chosen = temperature is not None
+
     col_back, col_next = st.columns(2)
     with col_back:
         if st.button("← Back"):
             _reset_run()
             _go(6)
     with col_next:
+        if not _temp_chosen:
+            st.caption("Select a Temperature to continue.")
         filters_changed = (
             temperature != st.session_state.temperature or
             genre_selection != st.session_state.genre or
             decade_selection != st.session_state.decade
         )
-        if st.button("Next →  (build anchor pool)", type="primary"):
+        if st.button("Next → (build anchor pool)", type="primary",
+                     disabled=not _temp_chosen):
             st.session_state.temperature = temperature
             st.session_state.genre       = genre_selection
             st.session_state.decade      = decade_selection
@@ -1436,7 +1562,7 @@ def step_discovery():
 # ─────────────────────────────────────────────────────────────
 
 def step_anchor_pool():
-    st.subheader("Step 8 — Anchor Pool")
+    st.subheader("Anchor Pool")
     temperature = st.session_state.temperature
     genre       = st.session_state.genre
     decade      = st.session_state.decade
@@ -1569,7 +1695,7 @@ def step_anchor_pool():
 # ─────────────────────────────────────────────────────────────
 
 def step_run():
-    st.subheader("Step 9 — Review & Generate")
+    st.subheader("Review & Generate")
 
     p      = st.session_state.params
     state  = st.session_state.state_obj or ProjectState()
@@ -1888,7 +2014,7 @@ def _show_results(result: RecommendationResult):
 def step_export():
     from datetime import date
 
-    st.subheader("Step 10 — Export Your Playlist")
+    st.subheader("Export Your Playlist")
 
     # Surface any Spotify auth error immediately — shown before any other content
     # so it's visible even if result is None after the OAuth redirect.
@@ -2054,9 +2180,20 @@ def _sidebar():
 
         st.markdown("---")
         st.markdown("### Jump to step")
+        _current_step = st.session_state.step
         for i, label in enumerate(STEP_LABELS, 1):
-            if st.button(label, key=f"sidebar_{i}", use_container_width=True):
+            # Grey out steps the user hasn't reached yet
+            _reached = (i <= _current_step)
+            if st.button(label, key=f"sidebar_{i}", use_container_width=True,
+                         disabled=not _reached):
                 _go(i)
+
+        # Product Design — always accessible, not numbered as a step
+        st.markdown("")
+        if st.button("Product Design", key="sidebar_product_design",
+                     use_container_width=True):
+            st.session_state.show_product_design = True
+            st.rerun()
 
         st.markdown("---")
         if st.button("↺  Start over", use_container_width=True):
